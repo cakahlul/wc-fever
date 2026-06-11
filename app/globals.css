@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* System stacks — no build-time font fetch, instant render */
+  --font-display: 'Avenir Next', 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
+  --font-body: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-night text-ice font-body antialiased;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(60, 111, 240, 0.12), transparent),
+    radial-gradient(ellipse 60% 40% at 90% 10%, rgba(232, 181, 65, 0.06), transparent);
+  background-attachment: fixed;
+}
+
+/* Big-match shimmer: a gold sheen sweeping across the card border */
+.big-match-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.big-match-shimmer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 40%,
+    rgba(255, 209, 102, 0.12) 50%,
+    transparent 60%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.8s linear infinite;
+  pointer-events: none;
+}
+
+/* Thin scrollbars for the bracket scroller */
+.bracket-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+.bracket-scroll::-webkit-scrollbar-thumb {
+  @apply bg-night-50 rounded-full;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
