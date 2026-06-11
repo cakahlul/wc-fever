@@ -8,7 +8,8 @@
  * 30s interval is cheap.
  */
 
-export {}; // module scope — avoids global-script name collisions
+import { loadEnvLocal } from './load-env';
+loadEnvLocal();
 
 const BASE_URL = process.env.APP_BASE_URL ?? 'http://localhost:3000';
 const SECRET = process.env.CRON_SECRET;
