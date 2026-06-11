@@ -17,7 +17,7 @@ export function Hero3D() {
     <div
       className="h-64 w-full md:h-80"
       role="img"
-      aria-label="Interactive 3D World Cup trophy — drag to rotate"
+      aria-label="Interactive 3D World Cup 26 logo with the trophy — drag to rotate"
     >
       <TrophyScene />
     </div>
