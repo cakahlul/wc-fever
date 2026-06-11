@@ -4,14 +4,19 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
 /**
- * Browser-side Supabase client (anon key only). Singleton so the Realtime
- * websocket and the anonymous auth session are shared across components.
+ * Browser-side Supabase client (publishable key only — never the secret key).
+ * Singleton so the Realtime websocket and the anonymous auth session are
+ * shared across components.
  */
 let browserClient: SupabaseClient<Database> | null = null;
 
 export function getBrowserClient(): SupabaseClient<Database> | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  // New Supabase API keys (2025+): publishable key (sb_publishable_...) is the
+  // client-side key; the legacy anon key still works during the transition.
+  const key =
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
   if (!browserClient) {
     browserClient = createClient<Database>(url, key);

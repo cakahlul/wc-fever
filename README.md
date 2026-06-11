@@ -24,8 +24,8 @@ A vibrant, interactive companion app for the **FIFA World Cup 2026** (USA · Can
 
 In the Supabase SQL editor, run **`supabase/schema.sql`** then **`supabase/seed.sql`** (both idempotent). Then in the dashboard:
 
-- **Database → Replication**: enable Realtime publication on the `matches` table.
-- **Authentication → Providers**: enable **Anonymous sign-ins**.
+- **Database → Replication** (a.k.a. Publications): enable Realtime on the `matches` table — or toggle Realtime for `matches` directly in the Table Editor.
+- **Authentication → Sign In / Providers**: enable **Anonymous sign-ins**.
 
 ### 2. Environment
 
@@ -33,10 +33,13 @@ In the Supabase SQL editor, run **`supabase/schema.sql`** then **`supabase/seed.
 cp .env.example .env.local   # fill in every key
 ```
 
+Supabase URL + keys come from the dashboard's top-bar **Connect** button (or Project Settings → **API Keys**). New projects use the new key format (`sb_publishable_...` / `sb_secret_...`); the legacy `anon` / `service_role` JWT keys still work as fallbacks until their end-of-2026 deprecation.
+
 | Key | Purpose |
 | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser + server reads (RLS) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server-only writes (crawl jobs) |
+| `NEXT_PUBLIC_SUPABASE_URL` | Project URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Browser + server reads, RLS applies (legacy fallback: `NEXT_PUBLIC_SUPABASE_ANON_KEY`) |
+| `SUPABASE_SECRET_KEY` | Server-only writes for crawl jobs, bypasses RLS (legacy fallback: `SUPABASE_SERVICE_ROLE_KEY`) |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | Any OpenAI-compatible endpoint |
 | `CRON_SECRET` | Shared secret guarding `/api/crawl/*` |
 | `API_FOOTBALL_KEY` | Optional fallback when Playwright fails |
@@ -64,7 +67,7 @@ The live tick is **gated**: it queries the DB first and exits immediately (no Pl
 ## Code map
 
 ```
-lib/supabase/   typed clients (server = service role, client = anon) + queries
+lib/supabase/   typed clients (server = secret key, client = publishable) + queries
 lib/domain/     standings (full FIFA tiebreakers), third-place ranking,
                 bracket slot resolution, seeded simulator, big-match rules
 lib/crawl/      Playwright adapter (primary), API-Football adapter (fallback),
