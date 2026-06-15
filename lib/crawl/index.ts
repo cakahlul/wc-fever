@@ -26,3 +26,13 @@ export async function fetchLineupData(query: string): Promise<string | null> {
     return null;
   }
 }
+
+export async function fetchTimelineData(query: string): Promise<string | null> {
+  try {
+    const { crawlTimeline } = await import('./playwright-adapter');
+    return await crawlTimeline(query);
+  } catch (e) {
+    console.warn('Playwright timeline crawl failed', e);
+    return null;
+  }
+}

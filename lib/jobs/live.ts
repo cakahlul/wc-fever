@@ -1,21 +1,25 @@
 import 'server-only';
 import { createServiceClient } from '@/lib/supabase/server';
 import { joinMatchTeams } from '@/lib/supabase/queries';
-import { fetchLiveData, fetchLineupData } from '@/lib/crawl';
-import { extractJSON } from '@/lib/llm';
-import { LINEUP_EXTRACTION, LIVE_SCORE_EXTRACTION } from '@/lib/llm/prompts';
-import { matchFixture, matchTeam, type ExtractedLiveScores } from './helpers';
+import { espnFetchSummary, espnFindEvent } from '@/lib/crawl/espn-adapter';
 import { generateMatchReview } from './reviews';
 import { resolveBracket } from '@/lib/domain/bracket';
+import type { Database, Match, Team } from '@/lib/supabase/types';
 
 /**
  * Live tick — runs every 30s from the PM2 ticker, but is GATED: it queries
- * the DB first and exits immediately (no Playwright, no LLM) unless a match
- * is live or kicking off within 5 minutes. Most ticks cost one cheap query.
+ * the DB first and exits immediately unless a match is live, kicking off
+ * within 5 minutes, or sitting in the lineup-announcement window.
+ *
+ * All data comes from ESPN's public site.api summary endpoint, which returns
+ * score + status + lineups + events + commentary + stats + odds + gamecast
+ * in a single JSON call. One HTTP per relevant match per tick — no LLM, no
+ * scraping. Most ticks (no live or imminent matches) cost zero network.
  */
 
 const KICKOFF_LOOKAHEAD_MS = 5 * 60 * 1000;
-const LINEUP_WINDOW_MIN_MS = 60 * 60 * 1000; // crawl lineups 60–75 min pre-kickoff
+const STALE_AFTER_KICKOFF_MS = 3 * 60 * 60 * 1000;
+const LINEUP_WINDOW_MIN_MS = 60 * 60 * 1000;
 const LINEUP_WINDOW_MAX_MS = 75 * 60 * 1000;
 
 export async function runLiveTick() {
@@ -34,19 +38,20 @@ export async function runLiveTick() {
       m.status === 'scheduled' &&
       m.kickoff_utc &&
       new Date(m.kickoff_utc).getTime() - now <= KICKOFF_LOOKAHEAD_MS &&
-      // a match that "kicked off" >3h ago but never went live is stale, not imminent
-      now - new Date(m.kickoff_utc).getTime() < 3 * 60 * 60 * 1000
+      now - new Date(m.kickoff_utc).getTime() < STALE_AFTER_KICKOFF_MS
   );
-
-  // Lineup window check happens even without live matches (kickoff -75..-60min).
   const lineupCandidates = matches.filter((m) => {
-    if (m.status !== 'scheduled' || !m.kickoff_utc || !m.home_team_id || !m.away_team_id)
-      return false;
+    if (m.status !== 'scheduled' || !m.kickoff_utc || !m.home_team_id || !m.away_team_id) return false;
     const untilKickoff = new Date(m.kickoff_utc).getTime() - now;
     return untilKickoff >= LINEUP_WINDOW_MIN_MS && untilKickoff <= LINEUP_WINDOW_MAX_MS;
   });
 
-  if (liveMatches.length === 0 && imminent.length === 0 && lineupCandidates.length === 0) {
+  // De-duplicate (an imminent match may also be a lineup candidate).
+  const relevantById = new Map<string, Match>();
+  for (const m of [...liveMatches, ...imminent, ...lineupCandidates]) relevantById.set(m.id, m);
+  const relevant = [...relevantById.values()];
+
+  if (relevant.length === 0) {
     return { skipped: true, reason: 'no live or imminent matches' };
   }
 
@@ -54,128 +59,177 @@ export async function runLiveTick() {
     skipped: false,
     scoresUpdated: 0,
     lineupsCrawled: 0,
+    eventsUpdated: 0,
+    commentaryUpdated: 0,
+    statsUpdated: 0,
+    oddsUpdated: 0,
     reviewsGenerated: 0,
     bracketUpdates: 0,
     errors: [] as string[],
   };
 
-  // ---- live scores: crawl → cleanForLLM (inside adapter) → extractJSON → upsert ----
-  if (liveMatches.length > 0 || imminent.length > 0) {
+  const newlyFinished: string[] = [];
+  const teamsById = new Map(teams.map((t) => [t.id, t]));
+
+  for (const m of relevant) {
+    if (!m.home_team_id || !m.away_team_id || !m.kickoff_utc) continue;
+    const home = teamsById.get(m.home_team_id);
+    const away = teamsById.get(m.away_team_id);
+    if (!home || !away) continue;
     try {
-      const text = await fetchLiveData();
-      const extracted = await extractJSON<ExtractedLiveScores>(LIVE_SCORE_EXTRACTION, text);
-      const newlyFinished: string[] = [];
-
-      for (const ex of extracted?.matches ?? []) {
-        const home = matchTeam(ex.home, teams);
-        const away = matchTeam(ex.away, teams);
-        if (!home || !away) continue;
-        const found = matchFixture(home, away, matches);
-        if (!found) continue;
-        const { match, flipped } = found;
-        // Never resurrect a finished match from a stale crawl.
-        if (match.status === 'finished' && ex.status !== 'finished') continue;
-
-        const homeScore = flipped ? ex.away_score : ex.home_score;
-        const awayScore = flipped ? ex.home_score : ex.away_score;
-        const update = {
-          status: ex.status,
-          minute: ex.status === 'live' ? ex.minute : null,
-          home_score: homeScore,
-          away_score: awayScore,
-        };
-        const { error } = await db.from('matches').update(update).eq('id', match.id);
-        if (!error) {
-          summary.scoresUpdated++;
-          if (ex.status === 'finished' && match.status !== 'finished') {
-            newlyFinished.push(match.id);
-            Object.assign(match, update); // keep in-memory copy current for bracket resolution
-          }
-        }
-      }
-
-      // newly finished → review + bracket slot resolution
-      if (newlyFinished.length > 0) {
-        const withTeams = joinMatchTeams(matches, teams);
-        for (const id of newlyFinished) {
-          const m = withTeams.find((x) => x.id === id);
-          if (m && (await generateMatchReview(db, m))) summary.reviewsGenerated++;
-        }
-        for (const u of resolveBracket(teams, matches)) {
-          const { id, ...fields } = u;
-          const { error } = await db.from('matches').update(fields).eq('id', id);
-          if (!error) summary.bracketUpdates++;
-        }
-      }
+      await tickOneMatch(db, m, home, away, summary, newlyFinished);
     } catch (e) {
-      summary.errors.push(`live scores: ${(e as Error).message}`);
+      summary.errors.push(`m${m.match_number ?? '?'}: ${(e as Error).message}`);
     }
   }
 
-  // ---- lineup crawl (~60–75 min pre-kickoff, only if not stored yet) ----
-  for (const m of lineupCandidates) {
-    try {
-      const { count } = await db
-        .from('lineups')
-        .select('id', { count: 'exact', head: true })
-        .eq('match_id', m.id);
-      if ((count ?? 0) > 0) continue; // already crawled
+  if (newlyFinished.length > 0) {
+    const withTeams = joinMatchTeams(matches, teams);
+    for (const id of newlyFinished) {
+      const wt = withTeams.find((x) => x.id === id);
+      if (wt && (await generateMatchReview(db, wt))) summary.reviewsGenerated++;
+    }
+    for (const u of resolveBracket(teams, matches)) {
+      const { id, ...fields } = u;
+      const { error } = await db.from('matches').update(fields).eq('id', id);
+      if (!error) summary.bracketUpdates++;
+    }
+  }
 
-      const home = teams.find((t) => t.id === m.home_team_id)!;
-      const away = teams.find((t) => t.id === m.away_team_id)!;
-      const text = await fetchLineupData(`${home.name} vs ${away.name}`);
-      if (!text) continue;
+  return summary;
+}
 
-      interface LineupSide {
-        formation: string | null;
-        starters: Array<{ name: string; shirt_number: number | null; position: string | null; is_captain?: boolean }>;
-        subs: Array<{ name: string; shirt_number: number | null; position: string | null }>;
+/**
+ * Single ESPN round-trip for one DB match: resolves the eventId, pulls the
+ * summary, and patches the row with every field that changed. Lineups are
+ * upserted into the lineups table, the rest live on the matches row.
+ */
+async function tickOneMatch(
+  db: ReturnType<typeof createServiceClient>,
+  m: Match,
+  home: Team,
+  away: Team,
+  summary: {
+    scoresUpdated: number;
+    lineupsCrawled: number;
+    eventsUpdated: number;
+    commentaryUpdated: number;
+    statsUpdated: number;
+    oddsUpdated: number;
+    errors: string[];
+  },
+  newlyFinished: string[]
+) {
+  const ev = await espnFindEvent(home.name, away.name, home.code, away.code, m.kickoff_utc!);
+  if (!ev) return;
+  const data = await espnFetchSummary(ev.eventId, ev.homeAbbr, ev.awayAbbr);
+  if (!data) return;
+  const flipped =
+    ev.homeAbbr.toLowerCase() !== home.code.toLowerCase() &&
+    ev.awayAbbr.toLowerCase() === home.code.toLowerCase();
+  const ourHomeSide = flipped ? data.away : data.home;
+  const ourAwaySide = flipped ? data.home : data.away;
+  const ourHomeScore = flipped ? ev.awayScore : ev.homeScore;
+  const ourAwayScore = flipped ? ev.homeScore : ev.awayScore;
+
+  const update: Database['public']['Tables']['matches']['Update'] = {};
+
+  // -- score / status / minute --
+  // Never resurrect a finished match from a stale crawl.
+  const protectFinished = m.status === 'finished' && ev.status !== 'finished';
+  if (!protectFinished) {
+    if (m.status !== ev.status) update.status = ev.status;
+    if (m.minute !== (ev.status === 'live' ? ev.minute : null))
+      update.minute = ev.status === 'live' ? ev.minute : null;
+    if (m.home_score !== ourHomeScore) update.home_score = ourHomeScore;
+    if (m.away_score !== ourAwayScore) update.away_score = ourAwayScore;
+  }
+
+  // -- events --
+  if (data.events.length > 0) {
+    const events = data.events.map((e) => ({
+      minute: e.minute,
+      type: e.type,
+      team: flipped ? (e.team === 'home' ? 'away' : 'home') : e.team,
+      player: e.player,
+    }));
+    update.events = events;
+  }
+
+  // -- commentary / stats / odds / gamecast --
+  if (data.commentary.length > 0) update.commentary = data.commentary;
+  if (data.teamStats.home || data.teamStats.away) {
+    update.team_stats = flipped ? { home: data.teamStats.away, away: data.teamStats.home } : data.teamStats;
+  }
+  if ((data.playerStats.home?.length ?? 0) + (data.playerStats.away?.length ?? 0) > 0) {
+    update.player_stats = flipped
+      ? { home: data.playerStats.away, away: data.playerStats.home }
+      : data.playerStats;
+  }
+  if (data.odds.provider || data.odds.homeOdds != null) update.odds = data.odds;
+  const hasGamecast =
+    (data.gamecast.headToHead?.length ?? 0) > 0 ||
+    (data.gamecast.lastFiveHome?.length ?? 0) > 0 ||
+    (data.gamecast.lastFiveAway?.length ?? 0) > 0 ||
+    (data.gamecast.officials?.length ?? 0) > 0;
+  if (hasGamecast) update.gamecast = data.gamecast;
+
+  if (Object.keys(update).length > 0) {
+    const { error } = await db.from('matches').update(update).eq('id', m.id);
+    if (!error) {
+      if ('home_score' in update || 'status' in update) summary.scoresUpdated++;
+      if ('events' in update) summary.eventsUpdated++;
+      if ('commentary' in update) summary.commentaryUpdated++;
+      if ('team_stats' in update || 'player_stats' in update) summary.statsUpdated++;
+      if ('odds' in update) summary.oddsUpdated++;
+      if (update.status === 'finished' && m.status !== 'finished') {
+        newlyFinished.push(m.id);
+        // Keep in-memory copy consistent so bracket resolution sees the new state.
+        Object.assign(m, update);
       }
-      const extracted = await extractJSON<{ home: LineupSide | null; away: LineupSide | null }>(
-        LINEUP_EXTRACTION,
-        text
-      );
-      if (!extracted?.home || !extracted?.away) continue;
-      if (extracted.home.starters.length !== 11 || extracted.away.starters.length !== 11)
-        continue; // partial lineups are worse than none
+    }
+  }
 
+  // -- lineups (only if not already stored for this match) --
+  if (ourHomeSide && ourAwaySide && ourHomeSide.starters.length === 11 && ourAwaySide.starters.length === 11) {
+    const { count } = await db
+      .from('lineups')
+      .select('id', { count: 'exact', head: true })
+      .eq('match_id', m.id);
+    if ((count ?? 0) === 0) {
       const { data: squad } = await db
         .from('players')
         .select('*')
         .in('team_id', [home.id, away.id]);
-      const rows: any[] = [];
-      const pushSide = (side: LineupSide, teamId: string) => {
+      const rows: Database['public']['Tables']['lineups']['Insert'][] = [];
+      const pushSide = (side: typeof ourHomeSide, teamId: string) => {
         for (const role of ['starter', 'sub'] as const) {
           const list = role === 'starter' ? side.starters : side.subs;
-          for (const p of list ?? []) {
+          for (const p of list) {
             if (!p.name) continue;
-            const squadPlayer = (squad ?? []).find(
-              (sp) => sp.team_id === teamId && sp.name.toLowerCase() === p.name.toLowerCase()
+            const sp = (squad ?? []).find(
+              (s) => s.team_id === teamId && s.name.toLowerCase() === p.name.toLowerCase()
             );
             rows.push({
               match_id: m.id,
               team_id: teamId,
-              player_id: squadPlayer?.id ?? null,
+              player_id: sp?.id ?? null,
               player_name: p.name,
               shirt_number: p.shirt_number,
               position: p.position,
               role,
-              is_captain: !!(p as any).is_captain,
+              is_captain: !!p.is_captain,
               formation: side.formation,
             });
           }
         }
       };
-      pushSide(extracted.home, home.id);
-      pushSide(extracted.away, away.id);
+      pushSide(ourHomeSide, home.id);
+      pushSide(ourAwaySide, away.id);
       const { error } = await db
         .from('lineups')
         .upsert(rows, { onConflict: 'match_id,team_id,player_name' });
       if (!error) summary.lineupsCrawled++;
-    } catch (e) {
-      summary.errors.push(`lineup m${m.match_number}: ${(e as Error).message}`);
     }
   }
-
-  return summary;
 }

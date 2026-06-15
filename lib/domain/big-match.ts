@@ -6,8 +6,6 @@ import type { Match, Team } from '@/lib/supabase/types';
  * hype blurb generation, Home pinning) follows automatically.
  */
 
-const HOST_CODES = new Set(['USA', 'CAN', 'MEX']);
-
 /** Classic rivalries / heavyweight pairings, order-independent. */
 const RIVALRIES: Array<[string, string]> = [
   ['BRA', 'ARG'],
@@ -34,33 +32,51 @@ export interface BigMatchVerdict {
 }
 
 export function isBigMatch(
-  match: Pick<Match, 'stage'>,
+  match: Pick<Match, 'stage' | 'match_number'>,
   home: Team | null,
   away: Team | null
 ): BigMatchVerdict {
   const reasons: string[] = [];
 
-  // Late knockout rounds are always marquee fixtures.
-  if (match.stage === 'qf' || match.stage === 'sf' || match.stage === 'final') {
+  // Knockout from round-of-16 onward — every round is marquee.
+  if (match.stage === 'r32' || match.stage === 'r16' || match.stage === 'qf' || match.stage === 'sf' || match.stage === 'final') {
     reasons.push(
       match.stage === 'final'
         ? 'The World Cup Final'
         : match.stage === 'sf'
           ? 'Semi-final'
-          : 'Quarter-final'
+          : match.stage === 'qf'
+            ? 'Quarter-final'
+            : match.stage === 'r16'
+              ? 'Round of 16'
+              : 'Round of 32'
     );
   }
 
+  // Tournament opener — first match is always a global event.
+  if (match.match_number === 1) {
+    reasons.push('Tournament opener');
+  }
+
   if (home && away) {
-    if ((home.fifa_rank ?? 99) <= 10 && (away.fifa_rank ?? 99) <= 10) {
-      reasons.push('Top-10 heavyweight clash');
+    const homeRank = home.fifa_rank ?? 99;
+    const awayRank = away.fifa_rank ?? 99;
+    const combined = homeRank + awayRank;
+    const diff = Math.abs(homeRank - awayRank);
+    const best = Math.min(homeRank, awayRank);
+
+    // Two top-15 sides OR an aggregate top-25 of strong-but-not-elite pairings.
+    if ((homeRank <= 15 && awayRank <= 15) || combined <= 25) {
+      reasons.push('Heavyweight clash');
     }
+    // Top-10 side facing a credible challenger (potential upset / story match).
+    else if (best <= 10 && diff <= 20) {
+      reasons.push('Giant-killer potential');
+    }
+
     const key = [home.code, away.code].sort().join('-');
     if (rivalryKeys.has(key)) {
       reasons.push(`Classic rivalry: ${home.name} vs ${away.name}`);
-    }
-    if (HOST_CODES.has(home.code) || HOST_CODES.has(away.code)) {
-      reasons.push('Host nation on home soil');
     }
   }
 

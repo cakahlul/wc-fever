@@ -6,14 +6,20 @@ import { motion } from 'framer-motion';
 import { getBrowserClient, ensureAnonSession } from '@/lib/supabase/client';
 import type { Match, Team } from '@/lib/supabase/types';
 import {
+  applyGroupSimScores,
   autoSimulate,
   buildSimBracket,
   championFromPicks,
+  clearGroupScore,
+  getGroupScore,
   KNOCKOUT_ORDER,
+  setGroupScore,
+  setKnockoutWinner,
   type Picks,
   type SimBracketMatch,
 } from '@/lib/domain/simulation';
 import { slotLabel } from '@/lib/domain/bracket';
+import { computeAllStandings, GROUPS } from '@/lib/domain/standings';
 import { ConfettiBurst } from './confetti';
 
 /**
@@ -54,6 +60,77 @@ function prunePicks(teams: Team[], matches: Match[], picks: Picks): Picks {
     if (!removed) break;
   }
   return next;
+}
+
+/**
+ * Inline score stepper for a single group-stage match.
+ * Real finished matches are locked; the input shows the actual score.
+ */
+function GroupMatchRow({
+  match,
+  home,
+  away,
+  pickedScore,
+  onChange,
+  onClear,
+}: {
+  match: Match;
+  home: Team | null;
+  away: Team | null;
+  pickedScore: [number, number] | null;
+  onChange: (h: number, a: number) => void;
+  onClear: () => void;
+}) {
+  const finished = match.status === 'finished' && match.home_score != null && match.away_score != null;
+  const h = finished ? (match.home_score as number) : pickedScore?.[0] ?? 0;
+  const a = finished ? (match.away_score as number) : pickedScore?.[1] ?? 0;
+  const isPicked = !!pickedScore;
+  const Stepper = ({ value, onDelta, locked }: { value: number; onDelta: (d: number) => void; locked: boolean }) => (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        disabled={locked || value === 0}
+        onClick={() => onDelta(-1)}
+        className="h-5 w-5 rounded bg-night-50 text-xs leading-none hover:bg-night-100 disabled:opacity-30"
+        aria-label="decrement"
+      >−</button>
+      <span className={`w-4 text-center font-display tabular-nums ${isPicked || finished ? 'text-gold-bright' : 'text-mist'}`}>{value}</span>
+      <button
+        type="button"
+        disabled={locked || value >= 9}
+        onClick={() => onDelta(+1)}
+        className="h-5 w-5 rounded bg-night-50 text-xs leading-none hover:bg-night-100 disabled:opacity-30"
+        aria-label="increment"
+      >+</button>
+    </div>
+  );
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-night-50/50 bg-night-200 px-2 py-1 text-xs">
+      <span className="w-6 text-mist tabular-nums">M{match.match_number}</span>
+      <span className="flex w-20 items-center gap-1 truncate" title={home?.name}>
+        <span aria-hidden>{home?.flag_emoji ?? '·'}</span>
+        <span className="truncate">{home?.code ?? '?'}</span>
+      </span>
+      <Stepper value={h} onDelta={(d) => onChange(Math.max(0, h + d), a)} locked={finished} />
+      <span aria-hidden className="text-mist">–</span>
+      <Stepper value={a} onDelta={(d) => onChange(h, Math.max(0, a + d))} locked={finished} />
+      <span className="flex w-20 items-center gap-1 truncate" title={away?.name}>
+        <span aria-hidden>{away?.flag_emoji ?? '·'}</span>
+        <span className="truncate">{away?.code ?? '?'}</span>
+      </span>
+      {finished && <span className="text-[10px] uppercase tracking-wider text-pitch-line">final</span>}
+      {isPicked && !finished && (
+        <button
+          type="button"
+          onClick={onClear}
+          className="ml-auto text-[10px] uppercase tracking-wider text-mist hover:text-live"
+          aria-label="Clear pick"
+        >
+          clear
+        </button>
+      )}
+    </div>
+  );
 }
 
 function PickCard({
@@ -136,7 +213,21 @@ export function SimulatorClient({ teams, matches }: { teams: Team[]; matches: Ma
 
   const handlePick = useCallback(
     (matchNumber: number, teamId: string) => {
-      setPicks((prev) => prunePicks(teams, matches, { ...prev, [String(matchNumber)]: teamId }));
+      setPicks((prev) => prunePicks(teams, matches, setKnockoutWinner(prev, matchNumber, teamId)));
+    },
+    [teams, matches]
+  );
+
+  const handleGroupScore = useCallback(
+    (matchNumber: number, h: number, a: number) => {
+      setPicks((prev) => prunePicks(teams, matches, setGroupScore(prev, matchNumber, h, a)));
+    },
+    [teams, matches]
+  );
+
+  const handleGroupScoreClear = useCallback(
+    (matchNumber: number) => {
+      setPicks((prev) => prunePicks(teams, matches, clearGroupScore(prev, matchNumber)));
     },
     [teams, matches]
   );
@@ -144,6 +235,44 @@ export function SimulatorClient({ teams, matches }: { teams: Team[]; matches: Ma
   const handleAutoSim = () => {
     const seed = `wc2026-${Date.now()}`;
     setPicks((prev) => autoSimulate(teams, matches, prev, seed));
+  };
+
+  // Sync with current matchday: ask the server to refresh, then prefill picks
+  // from whatever real finished matches the DB now reports. Reload picks state
+  // wholesale — anything the user manually picked for a now-finished match is
+  // overridden by reality (which is the whole point of the button).
+  const [syncing, setSyncing] = useState(false);
+  const handleSync = async () => {
+    setSyncing(true);
+    setMessage(null);
+    try {
+      // Fire-and-forget kick the live tick so any in-progress match catches up.
+      // Reconcile is too slow to await on a click; we just refresh the DB read.
+      fetch('/api/crawl/live', { method: 'POST' }).catch(() => {});
+
+      const supabase = getBrowserClient();
+      if (!supabase) throw new Error('Supabase not configured');
+      const { data: fresh } = await supabase.from('matches').select('*').order('match_number');
+      if (!fresh) throw new Error('Failed to load matches');
+
+      let next: Picks = { ...picks };
+      for (const m of fresh) {
+        if (m.status !== 'finished' || m.match_number == null) continue;
+        if (m.home_score == null || m.away_score == null) continue;
+        if (m.stage === 'group') {
+          next = setGroupScore(next, m.match_number, m.home_score, m.away_score);
+        } else if (m.home_score !== m.away_score && m.home_team_id && m.away_team_id) {
+          const winnerId = m.home_score > m.away_score ? m.home_team_id : m.away_team_id;
+          next = setKnockoutWinner(next, m.match_number, winnerId);
+        }
+      }
+      setPicks(prunePicks(teams, fresh as Match[], next));
+      setMessage('Synced with current matchday ✓');
+    } catch (e) {
+      setMessage(`Sync failed: ${(e as Error).message}`);
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const handleSave = async () => {
@@ -194,6 +323,14 @@ export function SimulatorClient({ teams, matches }: { teams: Team[]; matches: Ma
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleSync}
+            disabled={syncing}
+            className="rounded-lg border border-pitch-line bg-night-100 px-4 py-2 text-sm hover:border-gold disabled:opacity-50"
+          >
+            {syncing ? 'Syncing…' : '↻ Sync with current matchday'}
+          </button>
           <button
             type="button"
             onClick={handleAutoSim}
@@ -261,6 +398,15 @@ export function SimulatorClient({ teams, matches }: { teams: Team[]; matches: Ma
         {message && <span className="text-xs text-mist">{message}</span>}
       </div>
 
+      {/* Group stage — score picks per match, with projected standings */}
+      <GroupStageSection
+        teams={teams}
+        matches={matches}
+        picks={picks}
+        onScore={handleGroupScore}
+        onClear={handleGroupScoreClear}
+      />
+
       {/* Rounds */}
       <div className="bracket-scroll overflow-x-auto rounded-xl border border-night-50/60 bg-night-300/50 p-4">
         <div className="flex gap-8" style={{ width: `${STAGE_TITLES.length * 240}px` }}>
@@ -288,5 +434,83 @@ export function SimulatorClient({ teams, matches }: { teams: Team[]; matches: Ma
         </div>
       </div>
     </div>
+  );
+}
+
+function GroupStageSection({
+  teams,
+  matches,
+  picks,
+  onScore,
+  onClear,
+}: {
+  teams: Team[];
+  matches: Match[];
+  picks: Picks;
+  onScore: (matchNumber: number, h: number, a: number) => void;
+  onClear: (matchNumber: number) => void;
+}) {
+  const teamsById = useMemo(() => new Map(teams.map((t) => [t.id, t])), [teams]);
+  // Projected standings layer simulated scores over real results.
+  const standings = useMemo(
+    () => computeAllStandings(teams, applyGroupSimScores(matches, picks)),
+    [teams, matches, picks]
+  );
+
+  return (
+    <section className="space-y-3">
+      <h2 className="font-display text-lg font-bold">Group stage</h2>
+      <p className="text-xs text-mist">
+        Pick scores to project group standings. Real finished matches lock automatically.
+      </p>
+      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+        {GROUPS.map((g) => {
+          const groupMatches = matches
+            .filter((m) => m.stage === 'group' && m.group === g && m.match_number != null)
+            .sort((a, b) => a.match_number! - b.match_number!);
+          const table = standings.get(g) ?? [];
+          return (
+            <div key={g} className="rounded-xl border border-night-50/60 bg-night-300/40 p-3">
+              <h3 className="mb-2 font-display text-sm font-bold text-gold-bright">Group {g}</h3>
+              <div className="space-y-1">
+                {groupMatches.map((m) => (
+                  <GroupMatchRow
+                    key={m.id}
+                    match={m}
+                    home={m.home_team_id ? teamsById.get(m.home_team_id) ?? null : null}
+                    away={m.away_team_id ? teamsById.get(m.away_team_id) ?? null : null}
+                    pickedScore={getGroupScore(picks, m.match_number!)}
+                    onChange={(h, a) => onScore(m.match_number!, h, a)}
+                    onClear={() => onClear(m.match_number!)}
+                  />
+                ))}
+              </div>
+              {table.length > 0 && (
+                <table className="mt-3 w-full text-[11px]">
+                  <thead className="text-mist">
+                    <tr>
+                      <th className="text-left font-normal">#</th>
+                      <th className="text-left font-normal">Team</th>
+                      <th className="text-right font-normal">Pts</th>
+                      <th className="text-right font-normal">GD</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {table.map((row) => (
+                      <tr key={row.team.id} className={row.rank <= 2 ? 'text-ice' : 'text-mist'}>
+                        <td className="tabular-nums">{row.rank}</td>
+                        <td className="truncate">{row.team.flag_emoji} {row.team.code}</td>
+                        <td className="text-right tabular-nums">{row.points}</td>
+                        <td className="text-right tabular-nums">{row.gd >= 0 ? `+${row.gd}` : row.gd}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }

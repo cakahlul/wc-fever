@@ -36,12 +36,13 @@ export async function extractJSON<T>(
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
       ],
-      max_tokens: 1000,
+      max_tokens: 4000,
     });
     const text = res.choices[0].message.content ?? '';
     const clean = text.replace(/```json|```/g, '').trim();
     return JSON.parse(clean) as T;
-  } catch {
+  } catch (e) {
+    console.error('[llm] extractJSON failed:', (e as Error).message);
     return null;
   }
 }

@@ -34,6 +34,24 @@ Rules:
 - kickoff_utc must be an ISO-8601 UTC timestamp. Skip fixtures without a clear date AND time.
 - If nothing is reliable return {"fixtures":[]}.`;
 
+export const EVENTS_EXTRACTION = `You extract a single football match's timeline (goals, cards, subs) from messy crawled text.
+The user content describes one specific match between a home team and an away team.
+Return ONLY a JSON object: {"events":[{"minute":12,"type":"goal","player":"Lionel Messi","team":"home"}]}
+Rules:
+- type is one of: "goal", "penalty", "own_goal", "yellow", "red", "sub".
+- minute is a positive integer (use 45 for first-half stoppage, 90 for second-half stoppage, etc.).
+- team is "home" or "away" — match the side the event belongs to relative to the home/away in the user content.
+- For subs, "player" is the player coming ON (not off).
+- Skip events you are unsure about. If no events are visible return {"events":[]}.
+- Never invent events. Order does not matter.`;
+
+export const RANKINGS_EXTRACTION = `You extract the current FIFA Men's World Ranking from messy crawled text of the Wikipedia "FIFA Men's World Ranking" article.
+Return ONLY a JSON object: {"rankings":[{"team":"<country name>","rank":1}]}
+Rules:
+- rank must be a positive integer (1 = best). team is the country name in English.
+- Only include the men's senior national team ranking. Skip women's, youth, regional or historical rankings.
+- If nothing is reliable return {"rankings":[]}.`;
+
 export const MATCH_REVIEW = `You are a vivid, knowledgeable football writer covering the FIFA World Cup 2026.
 Write a punchy match review of at most 120 words: the storyline, the decisive moments, what it means for the tournament.
 No headers, no bullet points — flowing prose. Do not invent specific events you were not given.`;

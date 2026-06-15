@@ -1,5 +1,5 @@
 import 'server-only';
-import type { Match, Team } from '@/lib/supabase/types';
+import type { Match, MatchEvent, Team } from '@/lib/supabase/types';
 
 /**
  * Shared crawl-job utilities: fuzzy team-name matching between crawled text
@@ -77,4 +77,41 @@ export interface ExtractedLiveMatch {
 
 export interface ExtractedLiveScores {
   matches: ExtractedLiveMatch[];
+}
+
+const VALID_EVENT_TYPES = new Set<MatchEvent['type']>([
+  'goal',
+  'own_goal',
+  'penalty',
+  'yellow',
+  'red',
+  'second_yellow',
+  'sub',
+]);
+
+/**
+ * Validates LLM-extracted event objects against the MatchEvent union.
+ * Drops anything with a bad shape; sorts by minute. Caller-friendly because
+ * the LLM occasionally invents types we don't store.
+ */
+export async function extractValidatedEvents(text: string): Promise<MatchEvent[]> {
+  const { extractJSON } = await import('@/lib/llm');
+  const { EVENTS_EXTRACTION } = await import('@/lib/llm/prompts');
+  const extracted = await extractJSON<{
+    events: Array<{ minute: number; type: string; player?: string; team: string }>;
+  }>(EVENTS_EXTRACTION, text);
+  const events: MatchEvent[] = [];
+  for (const e of extracted?.events ?? []) {
+    if (!Number.isFinite(e.minute)) continue;
+    if (e.team !== 'home' && e.team !== 'away') continue;
+    if (!VALID_EVENT_TYPES.has(e.type as MatchEvent['type'])) continue;
+    events.push({
+      minute: e.minute,
+      type: e.type as MatchEvent['type'],
+      team: e.team,
+      player: e.player,
+    });
+  }
+  events.sort((a, b) => a.minute - b.minute);
+  return events;
 }

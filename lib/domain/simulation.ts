@@ -15,7 +15,63 @@ import { computeAllStandings, isGroupComplete, GROUPS } from './standings';
  * kicked and self-corrects as real results land.
  */
 
+/**
+ * Picks storage is a single flat Record<string,string> (matches the jsonb column).
+ * Key conventions:
+ *   "<n>"   = legacy knockout winner team_id (kept for backwards compat).
+ *   "k:<n>" = knockout winner team_id (preferred for new writes).
+ *   "s:<n>" = group score, encoded as "<home>-<away>" (e.g. "2-0").
+ */
 export type Picks = Record<string, string>;
+
+export function getKnockoutWinner(picks: Picks, n: number): string | null {
+  return picks[`k:${n}`] ?? picks[String(n)] ?? null;
+}
+
+export function setKnockoutWinner(picks: Picks, n: number, teamId: string): Picks {
+  const next = { ...picks };
+  delete next[String(n)]; // collapse legacy key onto the namespaced one
+  next[`k:${n}`] = teamId;
+  return next;
+}
+
+export function clearKnockoutWinner(picks: Picks, n: number): Picks {
+  const next = { ...picks };
+  delete next[String(n)];
+  delete next[`k:${n}`];
+  return next;
+}
+
+export function getGroupScore(picks: Picks, n: number): [number, number] | null {
+  const v = picks[`s:${n}`];
+  if (!v) return null;
+  const [h, a] = v.split('-').map((x) => Number(x));
+  return Number.isInteger(h) && Number.isInteger(a) && h >= 0 && a >= 0 ? [h, a] : null;
+}
+
+export function setGroupScore(picks: Picks, n: number, h: number, a: number): Picks {
+  return { ...picks, [`s:${n}`]: `${h}-${a}` };
+}
+
+export function clearGroupScore(picks: Picks, n: number): Picks {
+  const next = { ...picks };
+  delete next[`s:${n}`];
+  return next;
+}
+
+/**
+ * Returns a NEW matches array where each unfinished group match with a
+ * simulated score is treated as finished. Used by buildSimBracket so the
+ * existing standings code can produce projected tables from sim picks.
+ */
+export function applyGroupSimScores(matches: Match[], picks: Picks): Match[] {
+  return matches.map((m) => {
+    if (m.stage !== 'group' || m.status === 'finished' || m.match_number == null) return m;
+    const score = getGroupScore(picks, m.match_number);
+    if (!score) return m;
+    return { ...m, status: 'finished', home_score: score[0], away_score: score[1] };
+  });
+}
 
 export const KNOCKOUT_ORDER: number[] = [
   // R32 → R16 → QF → SF → third place → final; resolution must follow this
@@ -76,17 +132,20 @@ export function buildSimBracket(
   matches: Match[],
   picks: Picks
 ): SimBracketMatch[] {
-  const ctx = buildBracketContext(teams, matches);
+  // Layer simulated group scores onto matches before building any context.
+  // Downstream standings + bracket resolution then operate on the synthetic
+  // "what if these picks were the real results" world.
+  const simMatches = applyGroupSimScores(matches, picks);
+  const ctx = buildBracketContext(teams, simMatches);
 
-  // Layer the fifa_rank projection under real results for incomplete groups.
-  const standings = computeAllStandings(teams, matches);
+  // For groups still incomplete even after sim scores, fall back to fifa_rank.
+  const standings = computeAllStandings(teams, simMatches);
   for (const g of GROUPS) {
-    if (ctx.groupResults.has(g)) continue; // real result wins
+    if (ctx.groupResults.has(g)) continue;
     const projected = [...teams]
       .filter((t) => t.group === g)
       .sort((a, b) => (a.fifa_rank ?? 999) - (b.fifa_rank ?? 999));
     const rows = standings.get(g) ?? [];
-    // Reuse the standings row shape; only .team and .rank are read downstream.
     ctx.groupResults.set(
       g,
       projected.map((team, idx) => ({
@@ -121,7 +180,7 @@ export function buildSimBracket(
     return id ? teamsById.get(id) ?? null : null;
   };
 
-  const knockout = matches
+  const knockout = simMatches
     .filter((m) => m.match_number != null && m.match_number >= 73)
     .sort((a, b) => a.match_number! - b.match_number!);
 
@@ -133,7 +192,7 @@ export function buildSimBracket(
       ? teamsById.get(m.away_team_id) ?? null
       : resolveSlot(m.away_slot, ctx, pickOverride);
     // A real finished result beats a pick.
-    let pickedWinnerId: string | null = picks[String(m.match_number)] ?? null;
+    let pickedWinnerId: string | null = getKnockoutWinner(picks, m.match_number!);
     if (m.status === 'finished' && m.home_score != null && m.away_score != null) {
       if (m.home_score !== m.away_score) {
         pickedWinnerId =
@@ -168,9 +227,9 @@ function assignProjectedThirds(
 }
 
 /**
- * Auto-simulate: fill every unpicked knockout match with a weighted coin flip
- * (winProbability over fifa_rank), walking KNOCKOUT_ORDER so each round feeds
- * the next. Existing picks and real results are preserved.
+ * Auto-simulate: fill every unpicked group match (score) and knockout match
+ * (winner) using a seeded RNG weighted by FIFA rank. Existing picks and real
+ * results are preserved.
  */
 export function autoSimulate(
   teams: Team[],
@@ -179,18 +238,59 @@ export function autoSimulate(
   seed: string
 ): Picks {
   const rng = mulberry32(seed);
-  const picks: Picks = { ...existingPicks };
+  let picks: Picks = { ...existingPicks };
 
+  // Groups first — scores influence knockout entrants downstream.
+  const groupMatches = matches
+    .filter((m) => m.stage === 'group' && m.match_number != null)
+    .sort((a, b) => a.match_number! - b.match_number!);
+  const teamsById = new Map(teams.map((t) => [t.id, t]));
+  for (const m of groupMatches) {
+    if (m.status === 'finished') continue; // real result preserved
+    if (getGroupScore(picks, m.match_number!)) continue; // already picked
+    const home = m.home_team_id ? teamsById.get(m.home_team_id) ?? null : null;
+    const away = m.away_team_id ? teamsById.get(m.away_team_id) ?? null : null;
+    if (!home || !away) continue;
+    const [hg, ag] = sampleScore(home.fifa_rank, away.fifa_rank, rng);
+    picks = setGroupScore(picks, m.match_number!, hg, ag);
+  }
+
+  // Knockouts: walk KNOCKOUT_ORDER so each round feeds the next.
   for (const num of KNOCKOUT_ORDER) {
     const bracket = buildSimBracket(teams, matches, picks);
     const sim = bracket.find((b) => b.match.match_number === num);
     if (!sim) continue;
     if (sim.pickedWinnerId) continue; // real result or manual pick
-    if (!sim.home || !sim.away) continue; // entrants unresolvable
+    if (!sim.home || !sim.away) continue;
     const pHome = winProbability(sim.home.fifa_rank, sim.away.fifa_rank);
-    picks[String(num)] = rng() < pHome ? sim.home.id : sim.away.id;
+    picks = setKnockoutWinner(picks, num, rng() < pHome ? sim.home.id : sim.away.id);
   }
   return picks;
+}
+
+/**
+ * Sample a score from FIFA rank difference: stronger side scores more on
+ * average. Caps each side at 5 so blowouts stay rare but possible.
+ */
+function sampleScore(rankA: number | null, rankB: number | null, rng: () => number): [number, number] {
+  const pA = winProbability(rankA, rankB);
+  // Mean goals roughly correlate with win probability; both sides get baseline.
+  const meanA = 0.6 + pA * 1.8; // ~0.6–2.4
+  const meanB = 0.6 + (1 - pA) * 1.8;
+  const pick = (mean: number) => {
+    // Cheap Poisson-ish via inverse CDF on a truncated distribution.
+    let k = 0;
+    let p = Math.exp(-mean);
+    let cum = p;
+    const u = rng();
+    while (u > cum && k < 5) {
+      k++;
+      p = (p * mean) / k;
+      cum += p;
+    }
+    return k;
+  };
+  return [pick(meanA), pick(meanB)];
 }
 
 /** The champion is whoever is picked (or has won) match 104. */

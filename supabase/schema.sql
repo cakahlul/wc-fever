@@ -46,6 +46,14 @@ create table if not exists matches (
   events        jsonb not null default '[]',  -- goals/cards/subs
   updated_at    timestamptz not null default now()
 );
+-- Phase 1 ESPN sync columns. Added via alter so existing prod DBs upgrade in
+-- place; the CREATE TABLE above doesn't list them so fresh installs pick them
+-- up here too (alter is no-op if already present).
+alter table matches add column if not exists commentary   jsonb not null default '[]';
+alter table matches add column if not exists player_stats jsonb not null default '{}';
+alter table matches add column if not exists team_stats   jsonb not null default '{}';
+alter table matches add column if not exists odds         jsonb not null default '{}';
+alter table matches add column if not exists gamecast     jsonb not null default '{}';
 create index if not exists idx_matches_stage   on matches(stage);
 create index if not exists idx_matches_group    on matches("group");
 create index if not exists idx_matches_kickoff  on matches(kickoff_utc);
@@ -169,6 +177,13 @@ alter table players       enable row level security;
 alter table lineups       enable row level security;
 
 -- public read for tournament data
+-- (drop-then-create so re-running schema.sql is safe on an existing DB —
+-- Postgres `create policy` has no `if not exists`)
+drop policy if exists "public read teams"    on teams;
+drop policy if exists "public read matches"  on matches;
+drop policy if exists "public read reviews"  on match_reviews;
+drop policy if exists "public read players"  on players;
+drop policy if exists "public read lineups"  on lineups;
 create policy "public read teams"    on teams         for select using (true);
 create policy "public read matches"  on matches       for select using (true);
 create policy "public read reviews"  on match_reviews for select using (true);
@@ -177,6 +192,10 @@ create policy "public read lineups"  on lineups       for select using (true);
 
 -- writes to tournament data are server-only (service role bypasses RLS).
 -- users manage only their own simulations:
+drop policy if exists "own sims select" on simulations;
+drop policy if exists "own sims insert" on simulations;
+drop policy if exists "own sims update" on simulations;
+drop policy if exists "own sims delete" on simulations;
 create policy "own sims select" on simulations for select using (auth.uid() = user_id);
 create policy "own sims insert" on simulations for insert with check (auth.uid() = user_id);
 create policy "own sims update" on simulations for update using (auth.uid() = user_id);

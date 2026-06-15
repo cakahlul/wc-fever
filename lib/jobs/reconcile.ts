@@ -2,9 +2,9 @@ import 'server-only';
 import { createServiceClient } from '@/lib/supabase/server';
 import { joinMatchTeams } from '@/lib/supabase/queries';
 import { fetchLiveData } from '@/lib/crawl';
-import { crawlSearch } from '@/lib/crawl/playwright-adapter';
+import { crawlSearch, crawlWikipediaLong } from '@/lib/crawl/playwright-adapter';
 import { extractJSON } from '@/lib/llm';
-import { LIVE_SCORE_EXTRACTION, SQUAD_EXTRACTION } from '@/lib/llm/prompts';
+import { LIVE_SCORE_EXTRACTION, SQUAD_EXTRACTION, RANKINGS_EXTRACTION } from '@/lib/llm/prompts';
 import { matchFixture, matchTeam, type ExtractedLiveScores } from './helpers';
 import { generateMatchReview, generateHypeBlurb } from './reviews';
 import { resolveBracket } from '@/lib/domain/bracket';
@@ -28,6 +28,7 @@ export async function runReconcile() {
     blurbsGenerated: 0,
     squadsRefreshed: 0,
     bracketUpdates: 0,
+    ranksUpdated: 0,
     errors: [] as string[],
   };
 
@@ -102,7 +103,7 @@ export async function runReconcile() {
   }
 
   // ---- 3. Squad refresh for late call-ups (fewer than 23 players is suspicious) ----
-  const { data: playerRows } = await db.from('players').select('id, team_id');
+  const { data: playerRows } = await db.from('players').select('id, team_id').range(0, 99999);
   const counts = new Map<string, number>();
   for (const p of playerRows ?? []) counts.set(p.team_id, (counts.get(p.team_id) ?? 0) + 1);
   const thin = teams.filter((t) => (counts.get(t.id) ?? 0) > 0 && (counts.get(t.id) ?? 0) < 23);
@@ -140,6 +141,25 @@ export async function runReconcile() {
     const { id, ...fields } = u;
     const { error } = await db.from('matches').update(fields).eq('id', id);
     if (!error) summary.bracketUpdates++;
+  }
+
+  // ---- 5. FIFA rankings refresh (slow-moving — runs each reconcile sweep) ----
+  try {
+    const text = await crawlWikipediaLong("FIFA Men's World Ranking");
+    const extracted = await extractJSON<{ rankings: Array<{ team: string; rank: number }> }>(
+      RANKINGS_EXTRACTION,
+      text
+    );
+    for (const r of extracted?.rankings ?? []) {
+      if (!Number.isInteger(r.rank) || r.rank < 1) continue;
+      const team = matchTeam(r.team, teams);
+      if (!team) continue;
+      if (team.fifa_rank === r.rank) continue;
+      const { error } = await db.from('teams').update({ fifa_rank: r.rank }).eq('id', team.id);
+      if (!error) summary.ranksUpdated++;
+    }
+  } catch (e) {
+    summary.errors.push(`rankings: ${(e as Error).message}`);
   }
 
   return summary;

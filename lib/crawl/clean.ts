@@ -14,7 +14,14 @@ const NOISE_PATTERNS: RegExp[] = [
 
 export const LLM_INPUT_CHAR_CAP = 3000;
 
-export function cleanForLLM(raw: string): string {
+export interface CleanOptions {
+  cap?: number;
+  minLineLength?: number;
+}
+
+export function cleanForLLM(raw: string, opts: CleanOptions = {}): string {
+  const cap = opts.cap ?? LLM_INPUT_CHAR_CAP;
+  const minLineLength = opts.minLineLength ?? 15;
   const lines = raw.split('\n').map((l) => l.trim());
 
   const kept: string[] = [];
@@ -23,19 +30,15 @@ export function cleanForLLM(raw: string): string {
       kept.push('');
       continue;
     }
-    // 1. Strip short lines — nav links, icon labels, stray numbers.
-    if (line.length < 15) continue;
-    // 2. Strip ad / cookie / legal boilerplate.
+    if (line.length < minLineLength) continue;
     if (NOISE_PATTERNS.some((p) => p.test(line))) continue;
     kept.push(line);
   }
 
-  // 3. Collapse 3+ consecutive blank lines into one.
   let text = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
-  // 4. Hard cap — never feed the model more than this.
-  if (text.length > LLM_INPUT_CHAR_CAP) {
-    text = text.slice(0, LLM_INPUT_CHAR_CAP) + '\n[truncated]';
+  if (text.length > cap) {
+    text = text.slice(0, cap) + '\n[truncated]';
   }
   return text;
 }

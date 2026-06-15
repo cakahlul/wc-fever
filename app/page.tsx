@@ -74,6 +74,25 @@ export default async function HomePage() {
         </div>
       </section>
 
+      {/* Next fixtures */}
+      <section aria-labelledby="next-fixtures">
+        <h2 id="next-fixtures" className="mb-3 font-display text-xl font-bold">
+          Coming up
+        </h2>
+        {upcoming.length === 0 && liveNow.length === 0 ? (
+          <EmptyState
+            title="No fixtures loaded yet"
+            hint="Run supabase/schema.sql + seed.sql, then npm run crawl:bootstrap to fill kickoff times."
+          />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[...liveNow, ...upcoming].slice(0, 6).map((m) => (
+              <MatchCard key={m.id} match={m} />
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Pinned big matches */}
       {pinned.length > 0 && (
         <section aria-labelledby="big-matches">
@@ -94,25 +113,6 @@ export default async function HomePage() {
           </div>
         </section>
       )}
-
-      {/* Next fixtures */}
-      <section aria-labelledby="next-fixtures">
-        <h2 id="next-fixtures" className="mb-3 font-display text-xl font-bold">
-          Coming up
-        </h2>
-        {upcoming.length === 0 && liveNow.length === 0 ? (
-          <EmptyState
-            title="No fixtures loaded yet"
-            hint="Run supabase/schema.sql + seed.sql, then npm run crawl:bootstrap to fill kickoff times."
-          />
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[...liveNow, ...upcoming].slice(0, 6).map((m) => (
-              <MatchCard key={m.id} match={m} />
-            ))}
-          </div>
-        )}
-      </section>
 
       {/* Quick nav */}
       <section aria-label="Quick navigation" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">

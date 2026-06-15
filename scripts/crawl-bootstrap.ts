@@ -3,8 +3,12 @@
  * Fills schedule gaps, seeds squads, generates missing reviews. Idempotent.
  */
 
+import { Agent, setGlobalDispatcher } from 'undici';
 import { loadEnvLocal } from './load-env';
 loadEnvLocal();
+
+// runBootstrap can take several minutes; disable undici's default 5-min header/body timeouts.
+setGlobalDispatcher(new Agent({ headersTimeout: 0, bodyTimeout: 0 }));
 
 const BASE_URL = process.env.APP_BASE_URL ?? 'http://localhost:3000';
 const SECRET = process.env.CRON_SECRET;
