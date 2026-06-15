@@ -1,4 +1,5 @@
 import 'server-only';
+import { unstable_cache } from 'next/cache';
 import { createReadClient } from './server';
 import type {
   LineupEntry,
@@ -59,28 +60,47 @@ export async function getMatchesWithTeams(): Promise<{
   return { matches: joinMatchTeams(matchesRes.data ?? [], teams), teams };
 }
 
-export async function getMatchById(id: string): Promise<MatchWithTeams | null> {
-  const supabase = createReadClient();
-  if (!supabase) return null;
-  const { data: match, error } = await supabase
-    .from('matches')
-    .select('*')
-    .eq('id', id)
-    .maybeSingle();
-  if (error || !match) return null;
-  const { data: teams } = await supabase.from('teams').select('*');
-  return joinMatchTeams([match], teams ?? [])[0];
+/**
+ * Per-match detail reads are cached and invalidated by the live tick
+ * (lib/jobs/live.ts → revalidateTag('match:<id>' | 'lineups:<id>' | 'review:<id>')).
+ * Between ticks the match page is served from Next's data cache, so opening or
+ * refreshing a match detail page doesn't hit Supabase until the ticker actually
+ * writes new data for that match.
+ */
+export function getMatchById(id: string): Promise<MatchWithTeams | null> {
+  return unstable_cache(
+    async () => {
+      const supabase = createReadClient();
+      if (!supabase) return null;
+      const { data: match, error } = await supabase
+        .from('matches')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (error || !match) return null;
+      const { data: teams } = await supabase.from('teams').select('*');
+      return joinMatchTeams([match], teams ?? [])[0];
+    },
+    ['match-by-id', id],
+    { tags: [`match:${id}`], revalidate: 3600 }
+  )();
 }
 
-export async function getLineups(matchId: string): Promise<LineupEntry[]> {
-  const supabase = createReadClient();
-  if (!supabase) return [];
-  const { data } = await supabase
-    .from('lineups')
-    .select('*')
-    .eq('match_id', matchId)
-    .order('shirt_number');
-  return data ?? [];
+export function getLineups(matchId: string): Promise<LineupEntry[]> {
+  return unstable_cache(
+    async () => {
+      const supabase = createReadClient();
+      if (!supabase) return [];
+      const { data } = await supabase
+        .from('lineups')
+        .select('*')
+        .eq('match_id', matchId)
+        .order('shirt_number');
+      return data ?? [];
+    },
+    ['lineups', matchId],
+    { tags: [`lineups:${matchId}`], revalidate: 3600 }
+  )();
 }
 
 export async function getPlayersByTeam(teamId: string): Promise<Player[]> {
@@ -94,15 +114,21 @@ export async function getPlayersByTeam(teamId: string): Promise<Player[]> {
   return data ?? [];
 }
 
-export async function getReview(matchId: string): Promise<MatchReview | null> {
-  const supabase = createReadClient();
-  if (!supabase) return null;
-  const { data } = await supabase
-    .from('match_reviews')
-    .select('*')
-    .eq('match_id', matchId)
-    .maybeSingle();
-  return data ?? null;
+export function getReview(matchId: string): Promise<MatchReview | null> {
+  return unstable_cache(
+    async () => {
+      const supabase = createReadClient();
+      if (!supabase) return null;
+      const { data } = await supabase
+        .from('match_reviews')
+        .select('*')
+        .eq('match_id', matchId)
+        .maybeSingle();
+      return data ?? null;
+    },
+    ['review', matchId],
+    { tags: [`review:${matchId}`], revalidate: 3600 }
+  )();
 }
 
 export async function getReviews(matchIds: string[]): Promise<MatchReview[]> {

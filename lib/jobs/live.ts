@@ -1,4 +1,5 @@
 import 'server-only';
+import { revalidateTag } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/server';
 import { joinMatchTeams } from '@/lib/supabase/queries';
 import { espnFetchSummary, espnFindEvent } from '@/lib/crawl/espn-adapter';
@@ -100,12 +101,18 @@ export async function runLiveTick() {
     const withTeams = joinMatchTeams(matches, teams);
     for (const id of newlyFinished) {
       const wt = withTeams.find((x) => x.id === id);
-      if (wt && (await generateMatchReview(db, wt))) summary.reviewsGenerated++;
+      if (wt && (await generateMatchReview(db, wt))) {
+        revalidateTag(`review:${id}`);
+        summary.reviewsGenerated++;
+      }
     }
     for (const u of resolveBracket(teams, matches)) {
       const { id, ...fields } = u;
       const { error } = await db.from('matches').update(fields).eq('id', id);
-      if (!error) summary.bracketUpdates++;
+      if (!error) {
+        revalidateTag(`match:${id}`);
+        summary.bracketUpdates++;
+      }
     }
   }
 
@@ -190,6 +197,7 @@ async function tickOneMatch(
   if (Object.keys(update).length > 0) {
     const { error } = await db.from('matches').update(update).eq('id', m.id);
     if (!error) {
+      revalidateTag(`match:${m.id}`);
       if ('home_score' in update || 'status' in update) summary.scoresUpdated++;
       if ('events' in update) summary.eventsUpdated++;
       if ('commentary' in update) summary.commentaryUpdated++;
@@ -242,7 +250,10 @@ async function tickOneMatch(
       const { error } = await db
         .from('lineups')
         .upsert(rows, { onConflict: 'match_id,team_id,player_name' });
-      if (!error) summary.lineupsCrawled++;
+      if (!error) {
+        revalidateTag(`lineups:${m.id}`);
+        summary.lineupsCrawled++;
+      }
     }
   }
 }
