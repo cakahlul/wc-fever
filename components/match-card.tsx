@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import type { MatchWithTeams } from '@/lib/supabase/types';
 import { slotLabel } from '@/lib/domain/bracket';
 import { isBigMatch } from '@/lib/domain/big-match';
+import { formatMatchMinute } from '@/lib/domain/minute';
 import { LocalTime } from './local-time';
 import { BigMatchBadge } from './big-match-badge';
 
@@ -92,7 +93,7 @@ export function MatchCard({ match }: { match: MatchWithTeams }) {
             {live ? (
               <span className="flex items-center gap-1 font-bold text-live">
                 <span aria-hidden className="h-2 w-2 rounded-full bg-live animate-live-pulse" />
-                LIVE {match.minute != null ? `${match.minute}'` : ''}
+                LIVE {formatMatchMinute(match.minute, match.minute_stoppage) ?? ''}
               </span>
             ) : finished ? (
               <span>FT</span>

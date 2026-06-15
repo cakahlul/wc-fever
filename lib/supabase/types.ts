@@ -121,6 +121,7 @@ export interface Database {
           away_slot: string | null;
           status: MatchStatus;
           minute: number | null;
+          minute_stoppage: number | null;
           home_score: number | null;
           away_score: number | null;
           events: MatchEvent[];
@@ -146,6 +147,7 @@ export interface Database {
           away_slot?: string | null;
           status?: MatchStatus;
           minute?: number | null;
+          minute_stoppage?: number | null;
           home_score?: number | null;
           away_score?: number | null;
           events?: MatchEvent[];

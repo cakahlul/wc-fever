@@ -7,6 +7,7 @@ import {
   getReview,
 } from '@/lib/supabase/queries';
 import { isBigMatch } from '@/lib/domain/big-match';
+import { formatMatchMinute } from '@/lib/domain/minute';
 import { slotLabel } from '@/lib/domain/bracket';
 import { BigMatchBadge } from '@/components/big-match-badge';
 import { LocalTime } from '@/components/local-time';
@@ -62,7 +63,7 @@ export default async function MatchPage({ params }: { params: { id: string } }) 
             {live && (
               <p className="mt-1 flex items-center justify-center gap-1.5 text-sm font-bold text-live">
                 <span aria-hidden className="h-2 w-2 rounded-full bg-live animate-live-pulse" />
-                {match.minute != null ? `${match.minute}'` : 'LIVE'}
+                {formatMatchMinute(match.minute, match.minute_stoppage) ?? 'LIVE'}
               </p>
             )}
             {finished && <p className="mt-1 text-xs uppercase text-mist">Full time</p>}

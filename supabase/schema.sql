@@ -54,6 +54,10 @@ alter table matches add column if not exists player_stats jsonb not null default
 alter table matches add column if not exists team_stats   jsonb not null default '{}';
 alter table matches add column if not exists odds         jsonb not null default '{}';
 alter table matches add column if not exists gamecast     jsonb not null default '{}';
+-- Stoppage time minute (e.g. 4 for "45+4'"). Stored alongside `minute` so the
+-- UI can render the conventional "base+extra" format instead of collapsing the
+-- two into a single nonsensical integer.
+alter table matches add column if not exists minute_stoppage int;
 create index if not exists idx_matches_stage   on matches(stage);
 create index if not exists idx_matches_group    on matches("group");
 create index if not exists idx_matches_kickoff  on matches(kickoff_utc);

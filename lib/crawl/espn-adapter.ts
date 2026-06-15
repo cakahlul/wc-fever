@@ -44,6 +44,7 @@ export interface EspnEventSummary {
   awayScore: number | null;
   status: 'scheduled' | 'live' | 'finished';
   minute: number | null;
+  minuteStoppage: number | null;
 }
 
 interface RawEvent {
@@ -90,10 +91,18 @@ export async function espnFetchScoreboardForDate(date: Date): Promise<EspnEventS
     const homeScore = home.score === '' ? null : Number(home.score);
     const awayScore = away.score === '' ? null : Number(away.score);
     const status = mapStatus(comp.status.type.state, comp.status.type.completed);
-    const minute = (() => {
-      if (status !== 'live') return null;
-      const v = comp.status.displayClock?.replace(/[^\d]/g, '');
-      return v ? Number(v) : null;
+    // displayClock examples: "9'", "45'", "45'+2'", "90'+8'". We capture the
+    // base and stoppage separately so the UI can render "45+2'" instead of
+    // collapsing it into the nonsensical integer 452.
+    const { base, stoppage } = (() => {
+      if (status !== 'live') return { base: null as number | null, stoppage: null as number | null };
+      const raw = comp.status.displayClock ?? '';
+      const m = raw.match(/(\d+)(?:'?\+(\d+))?/);
+      if (!m) return { base: null, stoppage: null };
+      const b = Number(m[1]);
+      const s = m[2] ? Number(m[2]) : 0;
+      if (!Number.isFinite(b)) return { base: null, stoppage: null };
+      return { base: b, stoppage: s > 0 ? s : null };
     })();
     return {
       eventId: ev.id,
@@ -105,7 +114,8 @@ export async function espnFetchScoreboardForDate(date: Date): Promise<EspnEventS
       homeScore: Number.isFinite(homeScore as number) ? homeScore : null,
       awayScore: Number.isFinite(awayScore as number) ? awayScore : null,
       status,
-      minute,
+      minute: base,
+      minuteStoppage: stoppage,
     };
   });
 }

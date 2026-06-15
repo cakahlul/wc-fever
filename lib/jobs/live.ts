@@ -161,6 +161,8 @@ async function tickOneMatch(
     if (m.status !== ev.status) update.status = ev.status;
     if (m.minute !== (ev.status === 'live' ? ev.minute : null))
       update.minute = ev.status === 'live' ? ev.minute : null;
+    const nextStoppage = ev.status === 'live' ? ev.minuteStoppage : null;
+    if (m.minute_stoppage !== nextStoppage) update.minute_stoppage = nextStoppage;
     if (m.home_score !== ourHomeScore) update.home_score = ourHomeScore;
     if (m.away_score !== ourAwayScore) update.away_score = ourAwayScore;
   }
