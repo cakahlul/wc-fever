@@ -7,20 +7,25 @@ import { resolveBracket } from '@/lib/domain/bracket';
 import type { Database, Match, Team } from '@/lib/supabase/types';
 
 /**
- * Live tick — runs every 30s from the PM2 ticker, but is GATED: it queries
- * the DB first and exits immediately unless a match is live, kicking off
- * within 5 minutes, or sitting in the lineup-announcement window.
+ * Live tick — runs every 30s from the PM2 ticker. Every tick it refreshes
+ * every match from ESPN (incoming, live, and finished) so scores, lineups,
+ * schedule changes, and post-match stat backfills are always in sync.
  *
  * All data comes from ESPN's public site.api summary endpoint, which returns
  * score + status + lineups + events + commentary + stats + odds + gamecast
  * in a single JSON call. One HTTP per relevant match per tick — no LLM, no
- * scraping. Most ticks (no live or imminent matches) cost zero network.
+ * scraping.
  */
 
 const KICKOFF_LOOKAHEAD_MS = 5 * 60 * 1000;
 const STALE_AFTER_KICKOFF_MS = 3 * 60 * 60 * 1000;
 const LINEUP_WINDOW_MIN_MS = 60 * 60 * 1000;
 const LINEUP_WINDOW_MAX_MS = 75 * 60 * 1000;
+// Post-match: ESPN keeps enriching stats/commentary/events for a while after
+// the final whistle. Keep ticking finished matches for a bounded window so the
+// final view isn't frozen at whatever the last live tick captured.
+const POST_MATCH_REFRESH_MS = 4 * 60 * 60 * 1000;
+const POST_MATCH_MIN_GAP_MS = 5 * 60 * 1000;
 
 export async function runLiveTick() {
   const db = createServiceClient();
@@ -45,14 +50,22 @@ export async function runLiveTick() {
     const untilKickoff = new Date(m.kickoff_utc).getTime() - now;
     return untilKickoff >= LINEUP_WINDOW_MIN_MS && untilKickoff <= LINEUP_WINDOW_MAX_MS;
   });
+  const recentlyFinished = matches.filter((m) => {
+    if (m.status !== 'finished' || !m.kickoff_utc) return false;
+    const sinceKickoff = now - new Date(m.kickoff_utc).getTime();
+    if (sinceKickoff <= 0 || sinceKickoff > POST_MATCH_REFRESH_MS) return false;
+    return now - new Date(m.updated_at).getTime() >= POST_MATCH_MIN_GAP_MS;
+  });
 
-  // De-duplicate (an imminent match may also be a lineup candidate).
+  // De-duplicate the time-critical buckets, then fall back to every other
+  // match so incoming/finished rows also get refreshed every tick.
   const relevantById = new Map<string, Match>();
-  for (const m of [...liveMatches, ...imminent, ...lineupCandidates]) relevantById.set(m.id, m);
+  for (const m of [...liveMatches, ...imminent, ...lineupCandidates, ...recentlyFinished, ...matches])
+    relevantById.set(m.id, m);
   const relevant = [...relevantById.values()];
 
   if (relevant.length === 0) {
-    return { skipped: true, reason: 'no live or imminent matches' };
+    return { skipped: true, reason: 'no matches in db' };
   }
 
   const summary = {
