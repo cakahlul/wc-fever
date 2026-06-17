@@ -1,6 +1,10 @@
 /**
  * One-shot bootstrap trigger: `npm run crawl:bootstrap`
  * Fills schedule gaps, seeds squads, generates missing reviews. Idempotent.
+ *
+ * Add `--force` (`npm run crawl:bootstrap -- --force`) to re-pull ESPN detail
+ * (events, lineups, stats, commentary, odds, gamecast, recap) for every
+ * finished match, overwriting existing data with the latest parsing logic.
  */
 
 import { Agent, setGlobalDispatcher } from 'undici';
@@ -19,8 +23,12 @@ if (!SECRET) {
 }
 
 async function main() {
-  console.log(`POST ${BASE_URL}/api/crawl/bootstrap ...`);
-  const res = await fetch(`${BASE_URL}/api/crawl/bootstrap`, {
+  // `--force` re-pulls ESPN detail (events, lineups, stats, commentary, odds,
+  // gamecast, recap) for ALL finished matches, overwriting existing data.
+  const force = process.argv.includes('--force');
+  const url = `${BASE_URL}/api/crawl/bootstrap${force ? '?force=1' : ''}`;
+  console.log(`POST ${url} ...`);
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'x-cron-secret': SECRET! },
   });

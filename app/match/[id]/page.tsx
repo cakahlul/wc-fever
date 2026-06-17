@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
   getLineups,
-  getMatchById,
+  getMatchByIdFresh,
   getPlayersByTeam,
   getReview,
 } from '@/lib/supabase/queries';
@@ -11,7 +11,7 @@ import { MatchLive } from '@/components/match-live';
 export const dynamic = 'force-dynamic';
 
 export default async function MatchPage({ params }: { params: { id: string } }) {
-  const match = await getMatchById(params.id);
+  const match = await getMatchByIdFresh(params.id);
   if (!match) notFound();
 
   const [lineups, review] = await Promise.all([getLineups(match.id), getReview(match.id)]);

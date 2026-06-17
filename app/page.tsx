@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { getMatchesWithTeams, getReviews } from '@/lib/supabase/queries';
+import { getMatchesWithTeamsFresh, getReviews } from '@/lib/supabase/queries';
 import { isBigMatch } from '@/lib/domain/big-match';
 import { Hero3D } from '@/components/hero-3d';
 import { Countdown } from '@/components/countdown';
@@ -18,7 +18,7 @@ const QUICK_NAV = [
 ];
 
 export default async function HomePage() {
-  const { matches, teams } = await getMatchesWithTeams();
+  const { matches, teams } = await getMatchesWithTeamsFresh();
   const rawMatches = matches.map(({ home_team, away_team, ...m }) => m);
   const now = Date.now();
 

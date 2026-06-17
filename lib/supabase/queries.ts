@@ -39,31 +39,49 @@ export function joinMatchTeams(matches: Match[], teams: Team[]): MatchWithTeams[
   }));
 }
 
+async function fetchMatchesWithTeams(): Promise<{
+  matches: MatchWithTeams[];
+  teams: Team[];
+}> {
+  const supabase = createReadClient();
+  if (!supabase) return { matches: [], teams: [] };
+  const [matchesRes, teamsRes] = await Promise.all([
+    supabase.from('matches').select('*').order('match_number'),
+    supabase.from('teams').select('*'),
+  ]);
+  if (matchesRes.error || teamsRes.error) {
+    console.error(
+      'getMatchesWithTeams failed:',
+      matchesRes.error?.message ?? teamsRes.error?.message
+    );
+    return { matches: [], teams: [] };
+  }
+  const teams = teamsRes.data ?? [];
+  return { matches: joinMatchTeams(matchesRes.data ?? [], teams), teams };
+}
+
 export function getMatchesWithTeams(): Promise<{
   matches: MatchWithTeams[];
   teams: Team[];
 }> {
-  return unstable_cache(
-    async () => {
-      const supabase = createReadClient();
-      if (!supabase) return { matches: [], teams: [] };
-      const [matchesRes, teamsRes] = await Promise.all([
-        supabase.from('matches').select('*').order('match_number'),
-        supabase.from('teams').select('*'),
-      ]);
-      if (matchesRes.error || teamsRes.error) {
-        console.error(
-          'getMatchesWithTeams failed:',
-          matchesRes.error?.message ?? teamsRes.error?.message
-        );
-        return { matches: [], teams: [] };
-      }
-      const teams = teamsRes.data ?? [];
-      return { matches: joinMatchTeams(matchesRes.data ?? [], teams), teams };
-    },
-    ['matches-with-teams'],
-    { tags: ['matches:all'], revalidate: 3600 }
-  )();
+  return unstable_cache(fetchMatchesWithTeams, ['matches-with-teams'], {
+    tags: ['matches:all'],
+    revalidate: 3600,
+  })();
+}
+
+/**
+ * Uncached seed for the realtime-driven /live page. The page is force-dynamic
+ * and the client takes over via Supabase Realtime, which only carries deltas
+ * that arrive AFTER subscribe — it cannot replay an already-past FT write. A
+ * cached seed would therefore freeze a late-loading client on stale state
+ * (e.g. a finished match stuck at "live 85'"), so the seed must be fresh.
+ */
+export function getMatchesWithTeamsFresh(): Promise<{
+  matches: MatchWithTeams[];
+  teams: Team[];
+}> {
+  return fetchMatchesWithTeams();
 }
 
 /**
@@ -73,23 +91,32 @@ export function getMatchesWithTeams(): Promise<{
  * refreshing a match detail page doesn't hit Supabase until the ticker actually
  * writes new data for that match.
  */
+async function fetchMatchById(id: string): Promise<MatchWithTeams | null> {
+  const supabase = createReadClient();
+  if (!supabase) return null;
+  const { data: match, error } = await supabase
+    .from('matches')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error || !match) return null;
+  const { data: teams } = await supabase.from('teams').select('*');
+  return joinMatchTeams([match], teams ?? [])[0];
+}
+
 export function getMatchById(id: string): Promise<MatchWithTeams | null> {
-  return unstable_cache(
-    async () => {
-      const supabase = createReadClient();
-      if (!supabase) return null;
-      const { data: match, error } = await supabase
-        .from('matches')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-      if (error || !match) return null;
-      const { data: teams } = await supabase.from('teams').select('*');
-      return joinMatchTeams([match], teams ?? [])[0];
-    },
-    ['match-by-id', id],
-    { tags: [`match:${id}`], revalidate: 3600 }
-  )();
+  return unstable_cache(() => fetchMatchById(id), ['match-by-id', id], {
+    tags: [`match:${id}`],
+    revalidate: 3600,
+  })();
+}
+
+/**
+ * Uncached seed for the realtime-driven match detail page — see
+ * getMatchesWithTeamsFresh for why the live seed must bypass the data cache.
+ */
+export function getMatchByIdFresh(id: string): Promise<MatchWithTeams | null> {
+  return fetchMatchById(id);
 }
 
 export function getLineups(matchId: string): Promise<LineupEntry[]> {

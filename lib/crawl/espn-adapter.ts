@@ -173,10 +173,18 @@ interface RawRosterPlayer {
   active: boolean;
   starter: boolean;
   jersey?: string;
-  athlete: { fullName: string; displayName: string };
+  athlete: { id?: string; fullName: string; displayName: string };
   position?: { abbreviation: string };
   subbedIn?: boolean;
   subbedOut?: boolean;
+  stats?: Array<{
+    name?: string;
+    displayName?: string;
+    shortDisplayName?: string;
+    abbreviation?: string;
+    value?: number;
+    displayValue?: string | number;
+  }>;
 }
 
 interface RawRoster {
@@ -243,9 +251,15 @@ const EVENT_TYPE_MAP: Record<string, MatchEvent['type']> = {
   'goal---header': 'goal',
   'goal---penalty': 'penalty',
   'penalty-scored': 'penalty',
-  'penalty-miss': 'penalty',
+  'penalty-miss': 'penalty_miss',
+  'penalty-missed': 'penalty_miss',
+  'penalty---missed': 'penalty_miss',
   'goal---own-goal': 'own_goal',
   'own-goal': 'own_goal',
+  'goal-disallowed': 'goal_disallowed',
+  'goal---disallowed': 'goal_disallowed',
+  'disallowed-goal': 'goal_disallowed',
+  'goal-cancelled': 'goal_disallowed',
   'yellow-card': 'yellow',
   'red-card': 'red',
   'second-yellow-card': 'second_yellow',
@@ -493,6 +507,43 @@ function parsePlayerStats(
   return out;
 }
 
+/**
+ * Per-player stats from `rosters[].roster[].stats`. ESPN's World Cup summaries
+ * leave `boxscore.players` empty and attach the box score to each roster entry
+ * instead, so this is the primary source for player stats (goals, assists,
+ * shots, cards...). Keyed by the stat's full `displayName` so the UI's label
+ * catalog and abbreviations line up with the boxscore path.
+ */
+function parseRosterPlayerStats(rosters: RawRoster[] | undefined): PlayerStatsBundle {
+  const out: PlayerStatsBundle = {};
+  for (const side of rosters ?? []) {
+    const rows: PlayerStatsRow[] = [];
+    for (const p of side.roster ?? []) {
+      const id = p.athlete?.id;
+      if (!id || !p.stats || p.stats.length === 0) continue;
+      const stats: Record<string, string | number> = {};
+      for (const s of p.stats) {
+        const key = s.displayName ?? s.shortDisplayName ?? s.name;
+        if (!key) continue;
+        stats[key] = s.displayValue ?? s.value ?? '';
+      }
+      if (Object.keys(stats).length === 0) continue;
+      rows.push({
+        athlete_id: id,
+        name: p.athlete.fullName ?? p.athlete.displayName ?? '',
+        position: p.position?.abbreviation ?? null,
+        jersey: p.jersey ?? null,
+        starter: !!p.starter,
+        stats,
+      });
+    }
+    if (rows.length === 0) continue;
+    if (side.homeAway === 'home') out.home = rows;
+    else if (side.homeAway === 'away') out.away = rows;
+  }
+  return out;
+}
+
 function parseOdds(raw: RawPickcenter[] | undefined): OddsBundle {
   const top = raw?.[0];
   if (!top) return {};
@@ -725,8 +776,16 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
     const type = ke.type?.type ?? '';
     if (isSkippableMeta(type)) continue;
 
-    const mapped = EVENT_TYPE_MAP[type];
+    let mapped = EVENT_TYPE_MAP[type];
     if (!mapped) continue;
+    // VAR overturns frequently arrive as a plain goal event whose only tell is
+    // the commentary text — reclassify so the UI marks it ❌ instead of a goal.
+    if (
+      (mapped === 'goal' || mapped === 'penalty' || mapped === 'own_goal') &&
+      /disallow|ruled out|no goal|chalked off|overturn|var(?:\b|:)/i.test(ke.text ?? '')
+    ) {
+      mapped = 'goal_disallowed';
+    }
     const minute = parseMinute(ke.clock?.displayValue ?? '', ke.period?.number ?? 1);
     if (minute == null) continue;
 
@@ -810,7 +869,12 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
 
   const commentary = parseCommentary(data.commentary);
   const teamStats = parseTeamStats(data.boxscore?.teams);
-  const playerStats = parsePlayerStats(data.boxscore?.players);
+  let playerStats = parsePlayerStats(data.boxscore?.players);
+  // World Cup summaries leave boxscore.players empty; per-player stats live on
+  // rosters[].roster[].stats instead.
+  if ((playerStats.home?.length ?? 0) + (playerStats.away?.length ?? 0) === 0) {
+    playerStats = parseRosterPlayerStats(rosters);
+  }
   const odds = parseOdds(data.pickcenter);
   const gamecast = parseGamecast(
     {

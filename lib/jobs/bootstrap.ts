@@ -66,10 +66,11 @@ interface ExtractedFixture {
   city: string | null;
 }
 
-export async function runBootstrap() {
+export async function runBootstrap(opts: { forceEspn?: boolean } = {}) {
+  const { forceEspn = false } = opts;
   const log = (msg: string) => console.log(`[bootstrap] ${msg}`);
   const t0 = Date.now();
-  log('start');
+  log(`start${forceEspn ? ' (forceEspn: re-pull ESPN detail for all finished matches)' : ''}`);
   const db = createServiceClient();
   const summary = {
     kickoffsFilled: 0,
@@ -378,7 +379,9 @@ export async function runBootstrap() {
   };
   const espnCandidates = matches.filter((m) => {
     if (!m.home_team_id || !m.away_team_id || !m.kickoff_utc) return false;
-    if (m.status === 'finished') return needsExtras(m) || !hasEspnRecap.has(m.id);
+    // forceEspn re-pulls every finished match regardless of what's already
+    // stored, so old data gets overwritten with the latest parsing logic.
+    if (m.status === 'finished') return forceEspn || needsExtras(m) || !hasEspnRecap.has(m.id);
     if (m.status === 'scheduled') {
       return isEmptyOdds(m.odds) || isEmptyGamecast(m.gamecast);
     }
@@ -448,8 +451,12 @@ export async function runBootstrap() {
       const ourAwaySide = flipped ? summary_.home : summary_.away;
 
       // -- lineups --
-      if (!lineupSet.has(m.id) && ourHomeSide && ourAwaySide) {
+      const forceFinished = forceEspn && m.status === 'finished';
+      if ((forceFinished || !lineupSet.has(m.id)) && ourHomeSide && ourAwaySide) {
         if (ourHomeSide.starters.length === 11 && ourAwaySide.starters.length === 11) {
+          // Force re-pull: clear stale rows first so a renamed/changed XI can't
+          // leave orphaned lineup entries the upsert wouldn't overwrite.
+          if (forceFinished) await db.from('lineups').delete().eq('match_id', m.id);
           const { data: squad } = await db
             .from('players')
             .select('*')
@@ -496,7 +503,7 @@ export async function runBootstrap() {
       }
 
       // -- events --
-      const needEvents = Array.isArray(m.events) && m.events.length === 0;
+      const needEvents = forceFinished || (Array.isArray(m.events) && m.events.length === 0);
       if (needEvents && summary_.events.length > 0) {
         const events = summary_.events.map((e) => ({
           minute: e.minute,

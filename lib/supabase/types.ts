@@ -80,6 +80,7 @@ export interface MatchEvent {
   stoppage?: number;
   type:
     | 'goal' | 'own_goal' | 'penalty'
+    | 'penalty_miss' | 'goal_disallowed'
     | 'yellow' | 'red' | 'second_yellow'
     | 'sub' | 'delay' | 'period' | 'start' | 'end';
   /** 'home'/'away' for player events. Metadata events (delay, period, start, end) have no team. */

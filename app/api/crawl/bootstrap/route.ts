@@ -11,7 +11,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
   try {
-    const summary = await runBootstrap();
+    const force = req.nextUrl.searchParams.get('force');
+    const forceEspn = force === '1' || force === 'true';
+    const summary = await runBootstrap({ forceEspn });
     return NextResponse.json(summary);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });

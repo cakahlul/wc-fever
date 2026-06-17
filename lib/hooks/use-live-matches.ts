@@ -30,6 +30,35 @@ export function useLiveMatches(
   const matchesRef = useRef(matches);
   matchesRef.current = matches;
 
+  // Reconcile against the table on mount and whenever the tab regains focus,
+  // independent of the websocket. Realtime only delivers changes that happen
+  // AFTER subscribe, so it can't replay an already-past write (e.g. a match
+  // that finished before this client loaded). Without this a late loader would
+  // stay frozen on its stale SSR seed — finished match stuck at "live 85'".
+  useEffect(() => {
+    const supabase = getBrowserClient();
+    if (!supabase) return;
+    let cancelled = false;
+    const reconcile = async () => {
+      const { data } = await supabase.from('matches').select('*');
+      if (cancelled || !data) return;
+      setMatches((prev) => {
+        const byId = new Map(prev.map((m) => [m.id, m]));
+        for (const row of data as Match[]) byId.set(row.id, { ...byId.get(row.id), ...row });
+        return Array.from(byId.values());
+      });
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') reconcile();
+    };
+    reconcile();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+
   useEffect(() => {
     const supabase = getBrowserClient();
     if (!supabase) return;

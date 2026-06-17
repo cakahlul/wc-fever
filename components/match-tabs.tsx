@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { FormationPitch } from '@/components/formation-pitch';
+import { collectMarks } from '@/lib/domain/player-marks';
 import type {
   CommentaryEntry,
   GamecastBundle,
@@ -10,7 +11,7 @@ import type {
   MatchEvent,
   OddsBundle,
   Player,
-  PlayerStatsBundle,
+  PlayerStatsRow,
   Team,
   TeamStatsBundle,
 } from '@/lib/supabase/types';
@@ -38,6 +39,8 @@ const EVENT_ICONS: Record<string, string> = {
   goal: '🥅',
   penalty: '🎯',
   own_goal: '🙃',
+  penalty_miss: '❌',
+  goal_disallowed: '❌',
   yellow: '🟨',
   red: '🟥',
   second_yellow: '🟥',
@@ -58,11 +61,14 @@ export function MatchTabs({ match, lineups, homeSquad, awaySquad, reviewBody, re
   const has = useMemo(() => {
     return {
       timeline: (match.events ?? []).length > 0,
-      lineups: homeLineup.length > 0 || awayLineup.length > 0 || homeSquad.length > 0 || awaySquad.length > 0,
-      stats:
-        Boolean(match.team_stats?.home || match.team_stats?.away) ||
+      lineups:
+        homeLineup.length > 0 ||
+        awayLineup.length > 0 ||
+        homeSquad.length > 0 ||
+        awaySquad.length > 0 ||
         (match.player_stats?.home?.length ?? 0) > 0 ||
         (match.player_stats?.away?.length ?? 0) > 0,
+      stats: Boolean(match.team_stats?.home || match.team_stats?.away),
       commentary: (match.commentary ?? []).length > 0,
       odds: Boolean(match.odds?.provider || match.odds?.homeOdds != null),
       gamecast: !finished && match.gamecast ? hasGamecastContent(match.gamecast) : false,
@@ -152,19 +158,12 @@ export function MatchTabs({ match, lineups, homeSquad, awaySquad, reviewBody, re
           />
         )}
 
-        {currentTab.key === 'stats' && (
-          <div className="space-y-6">
-            {(match.team_stats?.home || match.team_stats?.away) && (
-              <TeamStats
-                stats={match.team_stats}
-                homeCode={match.home_team?.code ?? 'HOME'}
-                awayCode={match.away_team?.code ?? 'AWAY'}
-              />
-            )}
-            {((match.player_stats?.home?.length ?? 0) > 0 || (match.player_stats?.away?.length ?? 0) > 0) && (
-              <PlayerStats stats={match.player_stats} homeTeam={match.home_team} awayTeam={match.away_team} />
-            )}
-          </div>
+        {currentTab.key === 'stats' && (match.team_stats?.home || match.team_stats?.away) && (
+          <TeamStats
+            stats={match.team_stats}
+            homeCode={match.home_team?.code ?? 'HOME'}
+            awayCode={match.away_team?.code ?? 'AWAY'}
+          />
         )}
 
         {currentTab.key === 'commentary' && <Commentary entries={match.commentary} live={live} />}
@@ -515,62 +514,225 @@ function TeamStats({
   );
 }
 
-function PlayerStats({
-  stats,
-  homeTeam,
-  awayTeam,
+// ESPN player-stats parity. Headers are abbreviated (full label in the title
+// attr) and the table scrolls horizontally so every column ESPN returns shows.
+const PLAYER_STAT_ABBREV: Record<string, string> = {
+  Goals: 'G',
+  'Total Goals': 'G',
+  Assists: 'A',
+  'Goal Assists': 'A',
+  Shots: 'SH',
+  'Total Shots': 'SH',
+  'Shots on Goal': 'ST',
+  'Shots On Goal': 'ST',
+  'Shots on Target': 'ST',
+  'Shots Faced': 'SHF',
+  Offsides: 'OF',
+  Fouls: 'FL',
+  'Fouls Committed': 'FC',
+  'Fouls Suffered': 'FS',
+  'Fouls Drawn': 'FS',
+  'Yellow Cards': 'YC',
+  'Red Cards': 'RC',
+  Saves: 'SV',
+  'Goals Conceded': 'GC',
+  'Goals Against': 'GA',
+  'Own Goals': 'OG',
+  Tackles: 'TK',
+  'Won Tackles': 'TK',
+  Interceptions: 'IN',
+  Clearances: 'CL',
+  Touches: 'TCH',
+  Passes: 'PAS',
+  'Accurate Passes': 'PAS',
+  'Minutes Played': 'MIN',
+  Minutes: 'MIN',
+  Appearances: 'APP',
+  'Substitute Appearances': 'SUB',
+};
+
+// Attacking stats first (ESPN order), then defensive/keeper, appearances last.
+const STAT_ORDER: Record<string, number> = {
+  Goals: 0, 'Total Goals': 0,
+  Assists: 1, 'Goal Assists': 1,
+  Shots: 2, 'Total Shots': 2,
+  'Shots on Goal': 3, 'Shots On Goal': 3, 'Shots on Target': 3,
+  Offsides: 4,
+  'Fouls Committed': 5, Fouls: 5,
+  'Fouls Suffered': 6, 'Fouls Drawn': 6,
+  'Yellow Cards': 7,
+  'Red Cards': 8,
+  'Own Goals': 9,
+  Saves: 10,
+  'Goals Against': 11, 'Goals Conceded': 11,
+  'Shots Faced': 12,
+  Appearances: 13,
+  'Substitute Appearances': 14,
+};
+
+// Abbreviation → human-readable definition for the glossary under the tables.
+const STAT_GLOSSARY: Record<string, string> = {
+  G: 'Goals',
+  A: 'Assists',
+  SH: 'Shots',
+  ST: 'Shots on target',
+  SHF: 'Shots faced',
+  OF: 'Offsides',
+  FL: 'Fouls',
+  FC: 'Fouls committed',
+  FS: 'Fouls suffered',
+  YC: 'Yellow cards',
+  RC: 'Red cards',
+  OG: 'Own goals',
+  SV: 'Saves',
+  GC: 'Goals conceded',
+  GA: 'Goals against',
+  TK: 'Tackles',
+  IN: 'Interceptions',
+  CL: 'Clearances',
+  TCH: 'Touches',
+  PAS: 'Passes',
+  MIN: 'Minutes played',
+  APP: 'Appearances',
+  SUB: 'Substitute appearances',
+};
+
+function abbrevStat(label: string): string {
+  const known = PLAYER_STAT_ABBREV[label];
+  if (known) return known;
+  const words = label.split(/\s+/).filter(Boolean);
+  if (words.length > 1) return words.map((w) => w[0]).join('').slice(0, 4).toUpperCase();
+  return label.slice(0, 3).toUpperCase();
+}
+
+/**
+ * ESPN-style per-player stats table for one side. Starters sort to the top,
+ * then by shirt number; the name cell carries inline goal/card/sub markers
+ * derived from the live event feed so the table reads like a box score.
+ */
+function PlayerStatsTable({
+  rows,
+  team,
+  events,
+  side,
 }: {
-  stats: PlayerStatsBundle;
-  homeTeam: Team | null;
-  awayTeam: Team | null;
+  rows: PlayerStatsRow[];
+  team: Team | null;
+  events: MatchEvent[];
+  side: 'home' | 'away';
 }) {
-  const renderSide = (rows: PlayerStatsBundle['home'], team: Team | null) => {
-    if (!rows || rows.length === 0) return null;
-    const allKeys = Array.from(new Set(rows.flatMap((r) => Object.keys(r.stats))));
-    const keys = allKeys.slice(0, 5);
-    return (
-      <div className="rounded-xl border border-night-50/60 bg-night-300/30 p-3">
-        <h3 className="mb-2 flex items-center gap-2 font-display text-sm font-bold">
-          <span aria-hidden>{team?.flag_emoji}</span>
-          {team?.name ?? '—'}
-        </h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[11px]">
-            <thead className="text-mist">
-              <tr>
-                <th className="py-1 pr-2 text-left font-normal">#</th>
-                <th className="py-1 pr-2 text-left font-normal">Player</th>
-                {keys.map((k) => (
-                  <th key={k} className="py-1 pr-2 text-right font-normal" title={k}>
-                    {k.length > 8 ? k.slice(0, 8) + '…' : k}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.athlete_id} className={r.starter ? 'text-ice' : 'text-mist'}>
+  if (!rows || rows.length === 0) return null;
+  const keys = Array.from(new Set(rows.flatMap((r) => Object.keys(r.stats)))).sort(
+    (a, b) => (STAT_ORDER[a] ?? 99) - (STAT_ORDER[b] ?? 99) || a.localeCompare(b)
+  );
+  const sorted = [...rows].sort(
+    (a, b) =>
+      Number(!!b.starter) - Number(!!a.starter) ||
+      (Number(a.jersey ?? 99) || 99) - (Number(b.jersey ?? 99) || 99)
+  );
+  return (
+    <div className="rounded-xl border border-night-50/60 bg-night-300/30 p-3">
+      <h3 className="mb-2 flex items-center gap-2 font-display text-sm font-bold">
+        <span aria-hidden>{team?.flag_emoji}</span>
+        {team?.name ?? '—'}
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]">
+          <thead className="text-mist">
+            <tr className="border-b border-night-50/40">
+              <th className="py-1 pr-2 text-left font-normal">#</th>
+              <th className="py-1 pr-3 text-left font-normal">Player</th>
+              {keys.map((k) => (
+                <th key={k} className="whitespace-nowrap px-1.5 py-1 text-right font-normal" title={k}>
+                  {abbrevStat(k)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r) => {
+              const m = collectMarks(events, r.name, side);
+              return (
+                <tr
+                  key={r.athlete_id}
+                  className={`border-t border-night-50/20 ${r.starter ? 'text-ice' : 'text-mist'}`}
+                >
                   <td className="py-0.5 pr-2 tabular-nums">{r.jersey ?? ''}</td>
-                  <td className="py-0.5 pr-2 truncate" title={r.name}>
-                    {r.name}
+                  <td className="whitespace-nowrap py-0.5 pr-3">
+                    <span title={r.name}>{r.name}</span>
+                    {m.goals.length > 0 && (
+                      <span className="ml-1" title={`Goal ${m.goals.join(', ')}`}>
+                        ⚽{m.goals.length > 1 ? m.goals.length : ''}
+                      </span>
+                    )}
+                    {m.ownGoals.length > 0 && (
+                      <span className="ml-0.5" title={`Own goal ${m.ownGoals.join(', ')}`}>🙃</span>
+                    )}
+                    {m.crosses.length > 0 && (
+                      <span className="ml-0.5" title={`Missed / disallowed ${m.crosses.join(', ')}`}>❌</span>
+                    )}
+                    {m.yellows.length > 0 && (
+                      <span className="ml-0.5" title={`Yellow ${m.yellows.join(', ')}`}>🟨</span>
+                    )}
+                    {m.reds.length > 0 && (
+                      <span className="ml-0.5" title={`Red ${m.reds.join(', ')}`}>🟥</span>
+                    )}
+                    {m.subIn && (
+                      <span className="ml-0.5 text-[9px] font-bold text-pitch-light" title={`On ${m.subIn}`}>
+                        ▲
+                      </span>
+                    )}
+                    {m.subOut && (
+                      <span className="ml-0.5 text-[9px] font-bold text-live" title={`Off ${m.subOut}`}>
+                        ▼
+                      </span>
+                    )}
                   </td>
                   {keys.map((k) => (
-                    <td key={k} className="py-0.5 pr-2 text-right tabular-nums">
+                    <td key={k} className="px-1.5 py-0.5 text-right tabular-nums">
                       {r.stats[k] ?? '—'}
                     </td>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
-    );
-  };
+    </div>
+  );
+}
+
+/**
+ * Legend for the player-stats tables: maps every column abbreviation actually
+ * present to its full term, plus the inline event icons. Driven by the stat
+ * keys so it only lists what's on screen.
+ */
+function StatGlossary({ statKeys }: { statKeys: string[] }) {
+  const gloOrder = Object.keys(STAT_GLOSSARY);
+  const abbrevs = Array.from(new Set(statKeys.map(abbrevStat)))
+    .filter((a) => STAT_GLOSSARY[a])
+    .sort((a, b) => gloOrder.indexOf(a) - gloOrder.indexOf(b));
   return (
-    <div className="grid gap-4 md:grid-cols-2">
-      {renderSide(stats.home, homeTeam)}
-      {renderSide(stats.away, awayTeam)}
+    <div className="rounded-xl border border-night-50/60 bg-night-300/20 p-3 text-[11px] text-mist">
+      <p className="mb-1.5 font-display text-xs font-bold text-ice">Glossary</p>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-3 md:grid-cols-4">
+        {abbrevs.map((a) => (
+          <div key={a} className="flex gap-1.5">
+            <dt className="shrink-0 font-bold text-ice/90">{a}</dt>
+            <dd className="truncate">{STAT_GLOSSARY[a]}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 border-t border-night-50/30 pt-2">
+        <span>⚽ Goal</span>
+        <span>🙃 Own goal</span>
+        <span>❌ Missed / disallowed</span>
+        <span>🟨 Yellow</span>
+        <span>🟥 Red</span>
+        <span>▲ Subbed on</span>
+        <span>▼ Subbed off</span>
+      </p>
     </div>
   );
 }
@@ -786,37 +948,71 @@ function LineupsPanel({
   awaySquad: Player[];
   finished: boolean;
 }) {
-  if (homeLineup.length > 0 && awayLineup.length > 0) {
-    return (
-      <div className="grid gap-6 md:grid-cols-2">
-        <FormationPitch
-          teamName={match.home_team?.name ?? 'Home'}
-          flag={match.home_team?.flag_emoji ?? null}
-          entries={homeLineup}
-        />
-        <FormationPitch
-          teamName={match.away_team?.name ?? 'Away'}
-          flag={match.away_team?.flag_emoji ?? null}
-          entries={awayLineup}
-        />
-      </div>
-    );
-  }
+  const events = match.events ?? [];
+  const hasFormation = homeLineup.length > 0 && awayLineup.length > 0;
+  const homeStats = match.player_stats?.home ?? [];
+  const awayStats = match.player_stats?.away ?? [];
+  const hasStats = homeStats.length > 0 || awayStats.length > 0;
+
+  // Per-player event overlays keyed by lineup row id (goals/cards/sub timing),
+  // derived from the live event feed so the pitch updates in realtime.
+  const homeMarks = useMemo(
+    () => new Map(homeLineup.map((e) => [e.id, collectMarks(events, e.player_name, 'home')])),
+    [homeLineup, events]
+  );
+  const awayMarks = useMemo(
+    () => new Map(awayLineup.map((e) => [e.id, collectMarks(events, e.player_name, 'away')])),
+    [awayLineup, events]
+  );
+
   return (
-    <div className="space-y-4">
-      {!finished && (
-        <p className="rounded-lg border border-night-50/60 bg-night-200 p-3 text-sm text-mist">
-          Lineups announced ~1 hour before kickoff — here are the full squads.
-        </p>
+    <div className="space-y-6">
+      {hasFormation && (
+        <div className="grid gap-6 md:grid-cols-2">
+          <FormationPitch
+            teamName={match.home_team?.name ?? 'Home'}
+            flag={match.home_team?.flag_emoji ?? null}
+            entries={homeLineup}
+            marks={homeMarks}
+          />
+          <FormationPitch
+            teamName={match.away_team?.name ?? 'Away'}
+            flag={match.away_team?.flag_emoji ?? null}
+            entries={awayLineup}
+            marks={awayMarks}
+          />
+        </div>
       )}
-      <div className="grid gap-6 md:grid-cols-2">
-        {match.home_team && (
-          <SquadList teamName={match.home_team.name} flag={match.home_team.flag_emoji} players={homeSquad} />
-        )}
-        {match.away_team && (
-          <SquadList teamName={match.away_team.name} flag={match.away_team.flag_emoji} players={awaySquad} />
-        )}
-      </div>
+
+      {!hasFormation && !hasStats && (
+        <div className="space-y-4">
+          {!finished && (
+            <p className="rounded-lg border border-night-50/60 bg-night-200 p-3 text-sm text-mist">
+              Lineups announced ~1 hour before kickoff — here are the full squads.
+            </p>
+          )}
+          <div className="grid gap-6 md:grid-cols-2">
+            {match.home_team && (
+              <SquadList teamName={match.home_team.name} flag={match.home_team.flag_emoji} players={homeSquad} />
+            )}
+            {match.away_team && (
+              <SquadList teamName={match.away_team.name} flag={match.away_team.flag_emoji} players={awaySquad} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {hasStats && (
+        <div className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <PlayerStatsTable rows={homeStats} team={match.home_team} events={events} side="home" />
+            <PlayerStatsTable rows={awayStats} team={match.away_team} events={events} side="away" />
+          </div>
+          <StatGlossary
+            statKeys={[...homeStats, ...awayStats].flatMap((r) => Object.keys(r.stats))}
+          />
+        </div>
+      )}
     </div>
   );
 }
