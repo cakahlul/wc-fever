@@ -36,7 +36,7 @@ export async function runLiveTick() {
     db.from('matches').select('*').order('match_number'),
     db.from('teams').select('*'),
   ]);
-  if (!matches || !teams) return { skipped: true, reason: 'db unavailable' };
+  if (!matches || !teams) return { skipped: true, reason: 'db unavailable', liveCount: 0 };
 
   const liveMatches = matches.filter((m) => m.status === 'live');
   const imminent = matches.filter(
@@ -66,11 +66,12 @@ export async function runLiveTick() {
   const relevant = [...relevantById.values()];
 
   if (relevant.length === 0) {
-    return { skipped: true, reason: 'no matches in db' };
+    return { skipped: true, reason: 'no matches in db', liveCount: liveMatches.length };
   }
 
   const summary = {
     skipped: false,
+    liveCount: liveMatches.length,
     scoresUpdated: 0,
     lineupsCrawled: 0,
     eventsUpdated: 0,

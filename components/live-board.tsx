@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { getBrowserClient } from '@/lib/supabase/client';
 import type { Match, MatchWithTeams, Team } from '@/lib/supabase/types';
@@ -9,9 +9,14 @@ import { EmptyState } from './skeleton';
 
 /**
  * Live tab: seeded with server-fetched data, then kept fresh by a Supabase
- * Realtime subscription on `matches` (postgres_changes). No client polling —
- * the crawl job writes to the DB and changes stream straight here.
+ * Realtime subscription on `matches` (postgres_changes). The crawl job writes
+ * to the DB and changes stream straight here. A polling fallback (only while
+ * the websocket is disconnected) re-reads the table at the same cadence as the
+ * server ticker — 10s when a match is live, 60s otherwise — so a dropped
+ * realtime connection still keeps scores fresh.
  */
+const LIVE_POLL_MS = 10_000;
+const IDLE_POLL_MS = 60_000;
 export function LiveBoard({
   initialMatches,
   teams,
@@ -21,6 +26,11 @@ export function LiveBoard({
 }) {
   const [matches, setMatches] = useState<Match[]>(initialMatches);
   const [connected, setConnected] = useState(false);
+
+  // Mirror latest matches into a ref so the polling loop can pick the cadence
+  // (live vs idle) without re-subscribing on every state change.
+  const matchesRef = useRef(matches);
+  matchesRef.current = matches;
 
   useEffect(() => {
     const supabase = getBrowserClient();
@@ -47,6 +57,33 @@ export function LiveBoard({
       supabase.removeChannel(channel);
     };
   }, []);
+
+  // Polling fallback: only fetches while realtime is down. Cadence tracks the
+  // server ticker (10s live / 60s idle) off the current match state.
+  useEffect(() => {
+    const supabase = getBrowserClient();
+    if (!supabase) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const schedule = () => {
+      const hasLive = matchesRef.current.some((m) => m.status === 'live');
+      timer = setTimeout(poll, hasLive ? LIVE_POLL_MS : IDLE_POLL_MS);
+    };
+    const poll = async () => {
+      if (!cancelled && !connected) {
+        const { data } = await supabase.from('matches').select('*');
+        if (!cancelled && data) setMatches(data as Match[]);
+      }
+      if (!cancelled) schedule();
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [connected]);
 
   const teamsById = useMemo(() => new Map(teams.map((t) => [t.id, t])), [teams]);
   const withTeams = useMemo<MatchWithTeams[]>(

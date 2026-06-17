@@ -1,11 +1,12 @@
 /**
- * PM2 entry point for the 30s live-score tick.
+ * PM2 entry point for the live-score tick.
  *
  *   pm2 start "npm run ticker" --name wc-live-ticker
  *
  * Each tick POSTs /api/crawl/live with the shared secret. The route itself is
- * gated (no live/imminent match → instant {skipped:true}), so an always-on
- * 30s interval is cheap.
+ * gated (no live/imminent match → instant {skipped:true}), so polling is cheap.
+ * The interval self-paces off the tick's `liveCount`: fast (10s) while a match
+ * is in play, slow (60s) otherwise.
  */
 
 import { loadEnvLocal } from './load-env';
@@ -13,18 +14,15 @@ loadEnvLocal();
 
 const BASE_URL = process.env.APP_BASE_URL ?? 'http://localhost:3000';
 const SECRET = process.env.CRON_SECRET;
-const INTERVAL_MS = 30_000;
+const LIVE_INTERVAL_MS = 10_000;
+const IDLE_INTERVAL_MS = 60_000;
 
 if (!SECRET) {
   console.error('CRON_SECRET is required');
   process.exit(1);
 }
 
-let ticking = false;
-
-async function tick() {
-  if (ticking) return; // never overlap slow ticks
-  ticking = true;
+async function tick(): Promise<number> {
   const startedAt = Date.now();
   try {
     const res = await fetch(`${BASE_URL}/api/crawl/live`, {
@@ -36,13 +34,19 @@ async function tick() {
       `[${new Date().toISOString()}] tick ${res.status} ${Date.now() - startedAt}ms`,
       JSON.stringify(body)
     );
+    return (body?.liveCount ?? 0) > 0 ? LIVE_INTERVAL_MS : IDLE_INTERVAL_MS;
   } catch (e) {
     console.error(`[${new Date().toISOString()}] tick failed:`, (e as Error).message);
-  } finally {
-    ticking = false;
+    return IDLE_INTERVAL_MS;
   }
 }
 
-console.log(`wc-fever live ticker → ${BASE_URL}/api/crawl/live every ${INTERVAL_MS / 1000}s`);
-tick();
-setInterval(tick, INTERVAL_MS);
+// Self-scheduling loop — sequential by construction, so ticks never overlap and
+// the next delay reflects the live/idle state the tick just observed.
+async function loop() {
+  const nextDelay = await tick();
+  setTimeout(loop, nextDelay);
+}
+
+console.log(`wc-fever live ticker → ${BASE_URL}/api/crawl/live (10s live / 60s idle)`);
+loop();
