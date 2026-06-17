@@ -8,8 +8,10 @@ import type { Match } from '@/lib/supabase/types';
  * Keeps a set of matches live in the browser: seeds from server-fetched rows,
  * then streams updates from a Supabase Realtime subscription on `matches`
  * (unfiltered — same behavior on the home grid, /live, and the match detail
- * page). A polling fallback (only while the websocket is down) re-reads the
- * table at the server ticker's cadence — 5s while a match is live, 60s idle.
+ * page). A polling fallback re-reads the table at the server ticker's cadence
+ * (5s live / 60s idle) whenever Realtime hasn't delivered a row within that
+ * window, so the UI stays fresh even if the channel joins but the publication
+ * never emits changes (e.g. `matches` not added to the Realtime publication).
  *
  * Every consumer shares the singleton browser client and the same unfiltered
  * subscription, so all subscribers see the same writes at the same time —
@@ -29,6 +31,14 @@ export function useLiveMatches(
   // (live vs idle) without re-subscribing on every state change.
   const matchesRef = useRef(matches);
   matchesRef.current = matches;
+
+  // Timestamp of the last row change actually delivered by Realtime. A joined
+  // channel ("SUBSCRIBED" → connected=true) does NOT guarantee deltas: if the
+  // `matches` table isn't in the Realtime publication (a common prod misconfig)
+  // the socket looks connected but no changes ever arrive. The poll loop below
+  // keys off this so it stays active when realtime is silent, regardless of
+  // `connected`.
+  const lastRealtimeAtRef = useRef(0);
 
   // Reconcile against the table on mount and whenever the tab regains focus,
   // independent of the websocket. Realtime only delivers changes that happen
@@ -70,6 +80,7 @@ export function useLiveMatches(
         (payload) => {
           const updated = payload.new as Match;
           if (!updated?.id) return;
+          lastRealtimeAtRef.current = Date.now();
           setMatches((prev) => {
             const idx = prev.findIndex((m) => m.id === updated.id);
             if (idx === -1) return [...prev, updated];
@@ -85,8 +96,14 @@ export function useLiveMatches(
     };
   }, []);
 
-  // Polling fallback: only fetches while realtime is down. Cadence tracks the
-  // server ticker (5s live / 60s idle) off the current match state.
+  // Polling fallback. Cadence tracks the server ticker (5s live / 60s idle).
+  // It fetches whenever Realtime hasn't delivered a row within the last cadence
+  // window — NOT merely when the socket is disconnected. A "SUBSCRIBED" channel
+  // with the `matches` table missing from the Realtime publication looks
+  // connected but never delivers changes (the prod-vs-local discrepancy), so
+  // gating on `connected` would freeze the UI on its SSR seed. When realtime is
+  // genuinely healthy the steady live deltas keep this self-suppressed, so it
+  // adds no load.
   useEffect(() => {
     const supabase = getBrowserClient();
     if (!supabase) return;
@@ -98,7 +115,10 @@ export function useLiveMatches(
       timer = setTimeout(poll, hasLive ? LIVE_POLL_MS : IDLE_POLL_MS);
     };
     const poll = async () => {
-      if (!cancelled && !connected) {
+      const hasLive = matchesRef.current.some((m) => m.status === 'live');
+      const cadence = hasLive ? LIVE_POLL_MS : IDLE_POLL_MS;
+      const realtimeFresh = Date.now() - lastRealtimeAtRef.current < cadence;
+      if (!cancelled && !realtimeFresh) {
         const { data } = await supabase.from('matches').select('*');
         if (!cancelled && data) {
           setMatches((prev) => {
@@ -116,7 +136,7 @@ export function useLiveMatches(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [connected]);
+  }, []);
 
   return { matches, connected };
 }
