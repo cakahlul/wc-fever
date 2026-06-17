@@ -325,6 +325,15 @@ export async function runBootstrap() {
     const awayEmpty = !t.away || Object.keys(t.away).length === 0;
     return homeEmpty && awayEmpty;
   };
+  // Rows stored before the stat-key migration are keyed by ESPN's display label
+  // ("POSSESSION", "Fouls") instead of the stable `name` ("possessionPct"). The
+  // UI catalog only maps `name`, so treat label-keyed data as stale and re-fetch.
+  const isLegacyTeamStats = (v: unknown): boolean => {
+    if (isEmptyTeamStats(v)) return false;
+    const t = v as { home?: object; away?: object };
+    const keys = [...Object.keys(t.home ?? {}), ...Object.keys(t.away ?? {})];
+    return !keys.some((k) => k === 'possessionPct' || k === 'totalShots' || k === 'foulsCommitted');
+  };
   const isEmptyOdds = (v: unknown): boolean => {
     if (isEmptyObj(v)) return true;
     const o = v as { provider?: string; homeOdds?: number | null; awayOdds?: number | null; drawOdds?: number | null };
@@ -353,6 +362,7 @@ export async function runBootstrap() {
     if (Array.isArray(m.events) && m.events.length === 0) return true;
     if (Array.isArray(m.commentary) && m.commentary.length === 0) return true;
     if (isEmptyTeamStats(m.team_stats)) return true;
+    if (isLegacyTeamStats(m.team_stats)) return true;
     if (isEmptyOdds(m.odds)) return true;
     if (isEmptyGamecast(m.gamecast)) return true;
     return false;
@@ -383,13 +393,23 @@ export async function runBootstrap() {
         log(`    ESPN: no summary`);
         continue;
       }
+      // Map ESPN home/away to our home/away. ESPN's "home" should match ours,
+      // but defensively check via the abbreviations.
+      const flipped =
+        ev.homeAbbr.toLowerCase() !== home.code.toLowerCase() &&
+        ev.awayAbbr.toLowerCase() === home.code.toLowerCase();
       // Persist the rich-sync fields whether or not lineups changed — they're
       // cheap, idempotent, and the UI is hungry for them.
       const updateExtras: Database['public']['Tables']['matches']['Update'] = {};
       if (summary_.commentary.length > 0) updateExtras.commentary = summary_.commentary;
-      if (summary_.teamStats.home || summary_.teamStats.away) updateExtras.team_stats = summary_.teamStats;
+      if (summary_.teamStats.home || summary_.teamStats.away)
+        updateExtras.team_stats = flipped
+          ? { home: summary_.teamStats.away, away: summary_.teamStats.home }
+          : summary_.teamStats;
       if ((summary_.playerStats.home?.length ?? 0) + (summary_.playerStats.away?.length ?? 0) > 0)
-        updateExtras.player_stats = summary_.playerStats;
+        updateExtras.player_stats = flipped
+          ? { home: summary_.playerStats.away, away: summary_.playerStats.home }
+          : summary_.playerStats;
       if (summary_.odds.provider || summary_.odds.homeOdds != null) updateExtras.odds = summary_.odds;
       const hasGamecastFields =
         (summary_.gamecast.headToHead?.length ?? 0) > 0 ||
@@ -405,11 +425,6 @@ export async function runBootstrap() {
           log(`    extras: saved (${Object.keys(updateExtras).join(', ')})`);
         } else log(`    extras update error: ${error.message}`);
       }
-      // Map ESPN home/away to our home/away. ESPN's "home" should match ours,
-      // but defensively check via the abbreviations.
-      const flipped =
-        ev.homeAbbr.toLowerCase() !== home.code.toLowerCase() &&
-        ev.awayAbbr.toLowerCase() === home.code.toLowerCase();
       const ourHomeSide = flipped ? summary_.away : summary_.home;
       const ourAwaySide = flipped ? summary_.home : summary_.away;
 

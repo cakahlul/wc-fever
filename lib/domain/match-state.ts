@@ -33,14 +33,20 @@ export function goalScorers(events: MatchEvent[] | null | undefined): {
 
 /**
  * Break label for a live match: "HALF TIME" while in the interval, else null.
- * Full time is conveyed separately by status === 'finished'. Derived from the
- * period events the adapter writes with canonical "Half time"/"Second half"
- * details, so it survives the realtime stream without a dedicated column.
+ * Full time is conveyed separately by status === 'finished'.
+ *
+ * The break is over the instant the clock advances past 45' — we do NOT wait
+ * for a "Second half" period event. ESPN doesn't always emit one, and a tick
+ * that refreshes only `minute` leaves `events` at the last halftime snapshot;
+ * relying on that event would pin the label to HALF TIME through the whole
+ * second half and hide the running minute.
  */
-export function liveBreakLabel(match: Pick<Match, 'status' | 'events'>): string | null {
+export function liveBreakLabel(match: Pick<Match, 'status' | 'events' | 'minute'>): string | null {
   if (match.status !== 'live') return null;
   const evs = match.events ?? [];
   const halfTime = evs.some((e) => e.type === 'period' && /half ?time/i.test(e.detail ?? ''));
+  if (!halfTime) return null;
   const secondHalf = evs.some((e) => e.type === 'period' && /(second|2nd) half/i.test(e.detail ?? ''));
-  return halfTime && !secondHalf ? 'HALF TIME' : null;
+  const clockAdvanced = match.minute != null && match.minute > 45;
+  return secondHalf || clockAdvanced ? null : 'HALF TIME';
 }

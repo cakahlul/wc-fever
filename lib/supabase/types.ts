@@ -43,8 +43,9 @@ export interface PlayerStatsBundle {
 }
 
 /**
- * Match-level team stats (possession, shots, fouls...) keyed by stat label.
- * ESPN exposes ~25 of these; we render whatever is present.
+ * Match-level team stats (possession, shots, fouls...) keyed by ESPN's stable
+ * stat `name` (e.g. possessionPct, totalShots, foulsCommitted). ESPN exposes 28
+ * of these; the UI maps them to a fixed catalog for labels/order/formatting.
  */
 export interface TeamStatsBundle {
   home?: Record<string, string | number>;

@@ -184,6 +184,31 @@ export function MatchTabs({ match, lineups, homeSquad, awaySquad, reviewBody }: 
 
 // ----------------------------- sub-components -----------------------------
 
+/**
+ * Player name(s) for a timeline event. For subs, `player` is coming ON and
+ * `playerOff` is going OFF — render both with green ▲ (IN) / red ▼ (OUT)
+ * markers. For all other events only `player` shows.
+ */
+function EventNames({ event: e, textColor }: { event: MatchEvent; textColor: string }) {
+  const isSub = e.type === 'sub';
+  return (
+    <>
+      <p className={`text-sm font-bold ${textColor}`}>
+        {isSub && <span aria-hidden className="text-pitch-light">▲ </span>}
+        {e.player ?? e.type}
+        {isSub && <span className="ml-1 text-[10px] font-normal text-pitch-light">(IN)</span>}
+      </p>
+      {e.playerOff && (
+        <p className="text-[10px] text-mist">
+          {isSub && <span aria-hidden className="text-live">▼ </span>}
+          {e.playerOff}
+          {isSub && <span className="ml-1 text-live">(OUT)</span>}
+        </p>
+      )}
+    </>
+  );
+}
+
 function EventTimeline({
   events,
   homeCode,
@@ -247,16 +272,14 @@ function EventTimeline({
                 {/* Left column — home event fills it, away event leaves empty spacer */}
                 {isHome ? (
                   <div className="flex flex-col items-end text-right">
-                    <p className={`text-sm font-bold ${textColor}`}>{e.player ?? e.type}</p>
-                    {e.playerOff && <p className="text-[10px] text-mist" aria-label="replacing">{e.playerOff}</p>}
+                    <EventNames event={e} textColor={textColor} />
                     <p className="text-[10px] uppercase tracking-wider text-mist">
                       <span aria-hidden>{flag ?? ''}</span> {code}
                     </p>
                   </div>
                 ) : (
                   <div aria-hidden className="invisible">
-                    <p className="text-sm font-bold">{e.player ?? e.type}</p>
-                    {e.playerOff && <p className="text-[10px]">{e.playerOff}</p>}
+                    <EventNames event={e} textColor={textColor} />
                     <p className="text-[10px] uppercase tracking-wider">
                       <span>{flag ?? ''}</span> {code}
                     </p>
@@ -278,16 +301,14 @@ function EventTimeline({
                 {/* Right column — away event fills it, home event leaves empty spacer */}
                 {!isHome ? (
                   <div className="flex flex-col items-start text-left">
-                    <p className={`text-sm font-bold ${textColor}`}>{e.player ?? e.type}</p>
-                    {e.playerOff && <p className="text-[10px] text-mist" aria-label="replacing">{e.playerOff}</p>}
+                    <EventNames event={e} textColor={textColor} />
                     <p className="text-[10px] uppercase tracking-wider text-mist">
                       <span aria-hidden>{flag ?? ''}</span> {code}
                     </p>
                   </div>
                 ) : (
                   <div aria-hidden className="invisible">
-                    <p className="text-sm font-bold">{e.player ?? e.type}</p>
-                    {e.playerOff && <p className="text-[10px]">{e.playerOff}</p>}
+                    <EventNames event={e} textColor={textColor} />
                     <p className="text-[10px] uppercase tracking-wider">
                       <span>{flag ?? ''}</span> {code}
                     </p>
@@ -309,6 +330,84 @@ function statValueNumber(v: string | number | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+// ESPN Team Stats parity. Keys are ESPN's stable stat `name`; order and grouping
+// mirror espn.com/soccer/team-stats. `viz: 'bar'` renders a comparative split
+// bar (counts); `viz: 'row'` renders plain values (percentages, cards, keeper
+// and penalty stats where a split bar would mislead).
+type StatFormat = 'int' | 'pct0' | 'pctFrac';
+interface StatDef {
+  key: string;
+  label: string;
+  viz: 'bar' | 'row';
+  format: StatFormat;
+  hideIfBothZero?: boolean;
+}
+
+const TEAM_STAT_GROUPS: Array<{ title: string; stats: StatDef[] }> = [
+  {
+    title: 'Possession',
+    stats: [{ key: 'possessionPct', label: 'Possession', viz: 'bar', format: 'pct0' }],
+  },
+  {
+    title: 'Shooting',
+    stats: [
+      { key: 'totalShots', label: 'Shots', viz: 'bar', format: 'int' },
+      { key: 'shotsOnTarget', label: 'Shots on Goal', viz: 'bar', format: 'int' },
+      { key: 'blockedShots', label: 'Blocked Shots', viz: 'bar', format: 'int' },
+      { key: 'shotPct', label: 'Shooting Accuracy', viz: 'row', format: 'pctFrac' },
+    ],
+  },
+  {
+    title: 'Passing',
+    stats: [
+      { key: 'totalPasses', label: 'Passes', viz: 'bar', format: 'int' },
+      { key: 'accuratePasses', label: 'Accurate Passes', viz: 'bar', format: 'int' },
+      { key: 'passPct', label: 'Pass Accuracy', viz: 'row', format: 'pctFrac' },
+      { key: 'totalCrosses', label: 'Crosses', viz: 'bar', format: 'int' },
+      { key: 'accurateCrosses', label: 'Accurate Crosses', viz: 'bar', format: 'int' },
+      { key: 'crossPct', label: 'Cross Accuracy', viz: 'row', format: 'pctFrac' },
+      { key: 'totalLongBalls', label: 'Long Balls', viz: 'bar', format: 'int' },
+      { key: 'accurateLongBalls', label: 'Accurate Long Balls', viz: 'bar', format: 'int' },
+      { key: 'longballPct', label: 'Long Ball Accuracy', viz: 'row', format: 'pctFrac' },
+    ],
+  },
+  {
+    title: 'Discipline',
+    stats: [
+      { key: 'foulsCommitted', label: 'Fouls', viz: 'bar', format: 'int' },
+      { key: 'wonCorners', label: 'Corner Kicks', viz: 'bar', format: 'int' },
+      { key: 'offsides', label: 'Offsides', viz: 'bar', format: 'int' },
+      { key: 'yellowCards', label: 'Yellow Cards', viz: 'row', format: 'int' },
+      { key: 'redCards', label: 'Red Cards', viz: 'row', format: 'int' },
+      { key: 'penaltyKickGoals', label: 'Penalty Goals', viz: 'row', format: 'int', hideIfBothZero: true },
+      { key: 'penaltyKickShots', label: 'Penalty Kicks Taken', viz: 'row', format: 'int', hideIfBothZero: true },
+    ],
+  },
+  {
+    title: 'Defending',
+    stats: [
+      { key: 'totalTackles', label: 'Tackles', viz: 'bar', format: 'int' },
+      { key: 'effectiveTackles', label: 'Effective Tackles', viz: 'bar', format: 'int' },
+      { key: 'tacklePct', label: 'Tackle Success', viz: 'row', format: 'pctFrac' },
+      { key: 'interceptions', label: 'Interceptions', viz: 'bar', format: 'int' },
+      { key: 'totalClearance', label: 'Clearances', viz: 'bar', format: 'int' },
+      { key: 'effectiveClearance', label: 'Effective Clearances', viz: 'bar', format: 'int' },
+    ],
+  },
+  {
+    title: 'Goalkeeping',
+    stats: [{ key: 'saves', label: 'Saves', viz: 'row', format: 'int' }],
+  },
+];
+
+function fmtStat(v: string | number | undefined, format: StatFormat): string {
+  if (v == null || v === '') return '—';
+  const n = statValueNumber(v);
+  if (format === 'pct0') return `${Math.round(n)}%`; // possession "79.7" -> "80%"
+  if (format === 'pctFrac') return `${Math.round(n * 100)}%`; // "0.9" -> "90%"
+  return String(v);
+}
+
 function TeamStats({
   stats,
   homeCode,
@@ -318,47 +417,73 @@ function TeamStats({
   homeCode: string;
   awayCode: string;
 }) {
-  const labels = Array.from(new Set([...Object.keys(stats.home ?? {}), ...Object.keys(stats.away ?? {})]));
-  if (labels.length === 0) return null;
+  const home = stats.home ?? {};
+  const away = stats.away ?? {};
+  const present = (s: StatDef) => {
+    if (home[s.key] == null && away[s.key] == null) return false;
+    if (s.hideIfBothZero) return statValueNumber(home[s.key]) !== 0 || statValueNumber(away[s.key]) !== 0;
+    return true;
+  };
+  const groups = TEAM_STAT_GROUPS.map((g) => ({ title: g.title, stats: g.stats.filter(present) })).filter(
+    (g) => g.stats.length > 0
+  );
+  if (groups.length === 0) return null;
+
   return (
     <div className="rounded-2xl border border-night-50/60 bg-night-200 p-4">
       <h3 className="mb-3 font-display text-sm font-bold uppercase tracking-wider text-mist">Team stats</h3>
-      <div className="mb-3 flex items-center justify-between text-xs uppercase tracking-wider text-mist">
+      <div className="mb-4 flex items-center justify-between text-xs uppercase tracking-wider text-mist">
         <span>{homeCode}</span>
         <span>{awayCode}</span>
       </div>
-      <ul className="space-y-3">
-        {labels.map((label) => {
-          const h = stats.home?.[label];
-          const a = stats.away?.[label];
-          const hn = statValueNumber(h);
-          const an = statValueNumber(a);
-          const total = hn + an;
-          const hPct = total > 0 ? (hn / total) * 100 : 50;
-          const aPct = 100 - hPct;
-          return (
-            <li key={label}>
-              <p className="mb-1 text-center text-[11px] uppercase tracking-wider text-mist">{label}</p>
-              <div className="grid grid-cols-[3rem_1fr_3rem] items-center gap-2">
-                <span className="text-right font-display text-sm font-bold tabular-nums text-ice">{h ?? '—'}</span>
-                <div className="relative flex h-2 overflow-hidden rounded-full bg-night-100">
-                  <span
-                    className="absolute left-0 top-0 h-full rounded-l-full bg-gradient-to-r from-pitch to-pitch-light"
-                    style={{ width: `${hPct}%` }}
-                    aria-hidden
-                  />
-                  <span
-                    className="absolute right-0 top-0 h-full rounded-r-full bg-gradient-to-l from-gold to-gold-bright"
-                    style={{ width: `${aPct}%` }}
-                    aria-hidden
-                  />
-                </div>
-                <span className="text-left font-display text-sm font-bold tabular-nums text-ice">{a ?? '—'}</span>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+      <div className="space-y-5">
+        {groups.map((g) => (
+          <div key={g.title}>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-gold-bright/70">{g.title}</p>
+            <ul className="space-y-3">
+              {g.stats.map((s) => {
+                const hLabel = fmtStat(home[s.key], s.format);
+                const aLabel = fmtStat(away[s.key], s.format);
+                if (s.viz === 'row') {
+                  return (
+                    <li key={s.key} className="grid grid-cols-[3rem_1fr_3rem] items-center gap-2">
+                      <span className="text-right font-display text-sm font-bold tabular-nums text-ice">{hLabel}</span>
+                      <span className="text-center text-[11px] uppercase tracking-wider text-mist">{s.label}</span>
+                      <span className="text-left font-display text-sm font-bold tabular-nums text-ice">{aLabel}</span>
+                    </li>
+                  );
+                }
+                const hn = statValueNumber(home[s.key]);
+                const an = statValueNumber(away[s.key]);
+                const total = hn + an;
+                const hPct = total > 0 ? (hn / total) * 100 : 50;
+                const aPct = 100 - hPct;
+                return (
+                  <li key={s.key}>
+                    <p className="mb-1 text-center text-[11px] uppercase tracking-wider text-mist">{s.label}</p>
+                    <div className="grid grid-cols-[3rem_1fr_3rem] items-center gap-2">
+                      <span className="text-right font-display text-sm font-bold tabular-nums text-ice">{hLabel}</span>
+                      <div className="relative flex h-2 overflow-hidden rounded-full bg-night-100">
+                        <span
+                          className="absolute left-0 top-0 h-full rounded-l-full bg-gradient-to-r from-pitch to-pitch-light"
+                          style={{ width: `${hPct}%` }}
+                          aria-hidden
+                        />
+                        <span
+                          className="absolute right-0 top-0 h-full rounded-r-full bg-gradient-to-l from-gold to-gold-bright"
+                          style={{ width: `${aPct}%` }}
+                          aria-hidden
+                        />
+                      </div>
+                      <span className="text-left font-display text-sm font-bold tabular-nums text-ice">{aLabel}</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

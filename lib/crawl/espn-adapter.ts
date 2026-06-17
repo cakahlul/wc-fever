@@ -383,8 +383,11 @@ function parseTeamStats(raw: Array<{ homeAway?: 'home' | 'away'; statistics?: Ra
     if (!side.statistics || side.statistics.length === 0) continue; // skip empty pre-match shells
     const dict: Record<string, string | number> = {};
     for (const s of side.statistics) {
-      const label = s.label ?? s.name;
-      dict[label] = s.displayValue;
+      // Key by ESPN's stable stat `name` (e.g. possessionPct, totalShots) so the
+      // UI can map to a fixed catalog for ESPN-parity labels/order/formatting.
+      // `label` varies in casing ("POSSESSION" vs "Fouls") and isn't stable.
+      if (!s.name) continue;
+      dict[s.name] = s.displayValue;
     }
     if (Object.keys(dict).length === 0) continue;
     if (side.homeAway === 'home') out.home = dict;
@@ -693,6 +696,9 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
       }
 
       if (mapped === 'sub') {
+        // ESPN orders participants [in, out]; the text regex above misses the
+        // on-player (no parenthetical), so take both names from participants.
+        playerName = ke.participants?.[0]?.athlete?.displayName?.trim() ?? playerName;
         playerOff = ke.participants?.[1]?.athlete?.displayName?.trim();
       }
     }
