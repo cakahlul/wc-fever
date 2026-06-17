@@ -113,6 +113,7 @@ export async function runLiveTick() {
         summary.errors.push(`bracket ${id} [${Object.keys(fields).join(',')}]: ${error.message}`);
       } else {
         revalidateTag(`match:${id}`);
+        revalidateTag('matches:all');
         summary.bracketUpdates++;
       }
     }
@@ -209,6 +210,7 @@ async function tickOneMatch(
       summary.errors.push(`m${m.match_number ?? '?'} update [${Object.keys(update).join(',')}]: ${error.message}`);
     } else {
       revalidateTag(`match:${m.id}`);
+      revalidateTag('matches:all');
       if ('home_score' in update || 'status' in update) summary.scoresUpdated++;
       if ('events' in update) summary.eventsUpdated++;
       if ('commentary' in update) summary.commentaryUpdated++;

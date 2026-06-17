@@ -39,25 +39,31 @@ export function joinMatchTeams(matches: Match[], teams: Team[]): MatchWithTeams[
   }));
 }
 
-export async function getMatchesWithTeams(): Promise<{
+export function getMatchesWithTeams(): Promise<{
   matches: MatchWithTeams[];
   teams: Team[];
 }> {
-  const supabase = createReadClient();
-  if (!supabase) return { matches: [], teams: [] };
-  const [matchesRes, teamsRes] = await Promise.all([
-    supabase.from('matches').select('*').order('match_number'),
-    supabase.from('teams').select('*'),
-  ]);
-  if (matchesRes.error || teamsRes.error) {
-    console.error(
-      'getMatchesWithTeams failed:',
-      matchesRes.error?.message ?? teamsRes.error?.message
-    );
-    return { matches: [], teams: [] };
-  }
-  const teams = teamsRes.data ?? [];
-  return { matches: joinMatchTeams(matchesRes.data ?? [], teams), teams };
+  return unstable_cache(
+    async () => {
+      const supabase = createReadClient();
+      if (!supabase) return { matches: [], teams: [] };
+      const [matchesRes, teamsRes] = await Promise.all([
+        supabase.from('matches').select('*').order('match_number'),
+        supabase.from('teams').select('*'),
+      ]);
+      if (matchesRes.error || teamsRes.error) {
+        console.error(
+          'getMatchesWithTeams failed:',
+          matchesRes.error?.message ?? teamsRes.error?.message
+        );
+        return { matches: [], teams: [] };
+      }
+      const teams = teamsRes.data ?? [];
+      return { matches: joinMatchTeams(matchesRes.data ?? [], teams), teams };
+    },
+    ['matches-with-teams'],
+    { tags: ['matches:all'], revalidate: 3600 }
+  )();
 }
 
 /**

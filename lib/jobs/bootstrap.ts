@@ -1,4 +1,5 @@
 import 'server-only';
+import { revalidateTag } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/server';
 import { joinMatchTeams } from '@/lib/supabase/queries';
 import type { Database } from '@/lib/supabase/types';
@@ -131,6 +132,8 @@ export async function runBootstrap() {
           .eq('id', row.id);
         if (!error) {
           row.kickoff_utc = fx.kickoff_utc;
+          revalidateTag('matches:all');
+          revalidateTag(`match:${row.id}`);
           summary.kickoffsFilled++;
         }
       }
@@ -178,6 +181,8 @@ export async function runBootstrap() {
         const { error } = await db.from('matches').update(update).eq('id', match.id);
         if (!error) {
           Object.assign(match, update);
+          revalidateTag('matches:all');
+          revalidateTag(`match:${match.id}`);
           newlyFinishedIds.push(match.id);
           applied++;
         }
@@ -394,8 +399,11 @@ export async function runBootstrap() {
       if (hasGamecastFields) updateExtras.gamecast = summary_.gamecast;
       if (Object.keys(updateExtras).length > 0) {
         const { error } = await db.from('matches').update(updateExtras).eq('id', m.id);
-        if (!error) log(`    extras: saved (${Object.keys(updateExtras).join(', ')})`);
-        else log(`    extras update error: ${error.message}`);
+        if (!error) {
+          revalidateTag('matches:all');
+          revalidateTag(`match:${m.id}`);
+          log(`    extras: saved (${Object.keys(updateExtras).join(', ')})`);
+        } else log(`    extras update error: ${error.message}`);
       }
       // Map ESPN home/away to our home/away. ESPN's "home" should match ours,
       // but defensively check via the abbreviations.
@@ -442,6 +450,8 @@ export async function runBootstrap() {
             .upsert(rows, { onConflict: 'match_id,team_id,player_name' });
           if (!error) {
             summary.lineupsBackfilled++;
+            revalidateTag(`lineups:${m.id}`);
+            revalidateTag('matches:all');
             log(`    lineups: inserted ${rows.length} row(s)`);
           } else {
             log(`    lineups insert error: ${error.message}`);
@@ -469,6 +479,8 @@ export async function runBootstrap() {
         if (!error) {
           summary.eventsBackfilled++;
           m.events = events;
+          revalidateTag('matches:all');
+          revalidateTag(`match:${m.id}`);
           log(`    events: saved ${events.length}`);
         } else {
           log(`    events update error: ${error.message}`);
@@ -491,10 +503,18 @@ export async function runBootstrap() {
     try {
       if (m.status === 'finished') {
         log(`  review m${m.match_number}`);
-        if (await generateMatchReview(db, m)) summary.reviewsGenerated++;
+        if (await generateMatchReview(db, m)) {
+          summary.reviewsGenerated++;
+          revalidateTag('matches:all');
+          revalidateTag(`review:${m.id}`);
+        }
       } else if (isBigMatch(m, m.home_team, m.away_team).isBig) {
         log(`  blurb m${m.match_number}`);
-        if (await generateHypeBlurb(db, m)) summary.blurbsGenerated++;
+        if (await generateHypeBlurb(db, m)) {
+          summary.blurbsGenerated++;
+          revalidateTag('matches:all');
+          revalidateTag(`review:${m.id}`);
+        }
       }
     } catch (e) {
       summary.errors.push(`review m${m.match_number}: ${(e as Error).message}`);
@@ -507,7 +527,11 @@ export async function runBootstrap() {
     for (const u of resolveBracket(teams, matches)) {
       const { id, ...fields } = u;
       const { error } = await db.from('matches').update(fields).eq('id', id);
-      if (!error) bracketUpdates++;
+      if (!error) {
+        bracketUpdates++;
+        revalidateTag('matches:all');
+        revalidateTag(`match:${id}`);
+      }
     }
   } catch (e) {
     summary.errors.push(`bracket: ${(e as Error).message}`);

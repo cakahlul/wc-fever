@@ -281,16 +281,27 @@ function isSkippableMeta(type: string): boolean {
   return SKIP_EVENT_TYPES.has(type);
 }
 
-function parseMinute(displayValue: string, _period: number): { base: number; stoppage: number } | null {
+function parseMinute(displayValue: string, period: number): { base: number; stoppage: number } | null {
   // Examples: "9'", "45'+2'", "65'", "90'+8'"
   const m = displayValue.match(/(\d+)(?:'\+(\d+))?/);
-  if (!m) return null;
-  const base = Number(m[1]);
-  const stoppage = m[2] ? Number(m[2]) : 0;
+  let base: number;
+  let stoppage: number;
+  if (m) {
+    base = Number(m[1]);
+    stoppage = m[2] ? Number(m[2]) : 0;
+  } else {
+    // Empty displayValue (e.g. kickoff) — clock.value has seconds from start.
+    // Fallback to period-based estimation.
+    base = period === 1 ? 0 : 45;
+    stoppage = 0;
+    if (period >= 1 && base !== 0) {
+      // Start of second half
+    }
+  }
   if (!Number.isFinite(base)) return null;
-  // ESPN's base already accounts for second half: 65' in P2 is 65, not 110.
-  // Keep 45'+2' as {base:45, stoppage:2} so the UI renders "45+2'".
-  return { base, stoppage: stoppage > 0 ? stoppage : 0 };
+  if (stoppage < 0) stoppage = 0;
+  // Period 1 stoppage stays as-is. Period 2 stoppage (e.g. 90'+3) is appended to 90.
+  return { base, stoppage };
 }
 
 interface RawCommentary {
