@@ -109,7 +109,9 @@ export async function runLiveTick() {
     for (const u of resolveBracket(teams, matches)) {
       const { id, ...fields } = u;
       const { error } = await db.from('matches').update(fields).eq('id', id);
-      if (!error) {
+      if (error) {
+        summary.errors.push(`bracket ${id} [${Object.keys(fields).join(',')}]: ${error.message}`);
+      } else {
         revalidateTag(`match:${id}`);
         summary.bracketUpdates++;
       }
@@ -198,7 +200,9 @@ async function tickOneMatch(
 
   if (Object.keys(update).length > 0) {
     const { error } = await db.from('matches').update(update).eq('id', m.id);
-    if (!error) {
+    if (error) {
+      summary.errors.push(`m${m.match_number ?? '?'} update [${Object.keys(update).join(',')}]: ${error.message}`);
+    } else {
       revalidateTag(`match:${m.id}`);
       if ('home_score' in update || 'status' in update) summary.scoresUpdated++;
       if ('events' in update) summary.eventsUpdated++;
@@ -252,7 +256,9 @@ async function tickOneMatch(
       const { error } = await db
         .from('lineups')
         .upsert(rows, { onConflict: 'match_id,team_id,player_name' });
-      if (!error) {
+      if (error) {
+        summary.errors.push(`m${m.match_number ?? '?'} lineups upsert: ${error.message}`);
+      } else {
         revalidateTag(`lineups:${m.id}`);
         summary.lineupsCrawled++;
       }

@@ -176,7 +176,7 @@ export function buildSimBracket(
 
   const teamsById = ctx.teamsById;
   const pickOverride = (n: number): Team | null => {
-    const id = picks[String(n)];
+    const id = getKnockoutWinner(picks, n);
     return id ? teamsById.get(id) ?? null : null;
   };
 
