@@ -456,10 +456,14 @@ export async function runBootstrap() {
       if (needEvents && summary_.events.length > 0) {
         const events = summary_.events.map((e) => ({
           minute: e.minute,
+          stoppage: e.stoppage,
           type: e.type,
-          team: flipped ? (e.team === 'home' ? 'away' : 'home') : e.team,
+          team: e.team
+            ? (flipped ? (e.team === 'home' ? 'away' : 'home') : e.team)
+            : undefined,
           player: e.player,
           playerOff: e.playerOff,
+          detail: e.detail,
         }));
         const { error } = await db.from('matches').update({ events }).eq('id', m.id);
         if (!error) {

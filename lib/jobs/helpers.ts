@@ -87,6 +87,10 @@ const VALID_EVENT_TYPES = new Set<MatchEvent['type']>([
   'red',
   'second_yellow',
   'sub',
+  'delay',
+  'period',
+  'start',
+  'end',
 ]);
 
 /**

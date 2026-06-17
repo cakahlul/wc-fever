@@ -33,7 +33,7 @@ export interface MatchTabsProps {
   reviewBody: string | null;
 }
 
-const EVENT_ICONS: Record<MatchEvent['type'], string> = {
+const EVENT_ICONS: Record<string, string> = {
   goal: '⚽',
   penalty: '🎯',
   own_goal: '🥅',
@@ -41,6 +41,10 @@ const EVENT_ICONS: Record<MatchEvent['type'], string> = {
   red: '🟥',
   second_yellow: '🟥',
   sub: '🔁',
+  delay: '⏸️',
+  period: '⏱️',
+  start: '🚀',
+  end: '🛑',
 };
 
 export function MatchTabs({ match, lineups, homeSquad, awaySquad, reviewBody }: MatchTabsProps) {
@@ -210,11 +214,34 @@ function EventTimeline({
         />
         <ul className="space-y-3">
           {events.map((e, i) => {
+            const isMeta = e.type === 'delay' || e.type === 'period' || e.type === 'start' || e.type === 'end';
             const isHome = e.team === 'home';
             const isGoal = e.type === 'goal' || e.type === 'penalty' || e.type === 'own_goal';
             const flag = isHome ? homeFlag : awayFlag;
             const code = isHome ? homeCode : awayCode;
             const textColor = isGoal ? 'text-gold-bright' : 'text-ice';
+
+            // Metadata events (kickoff, halftime, delays) render centered, spanning all columns.
+            if (isMeta) {
+              const label = e.detail ?? (
+                e.type === 'delay' ? 'Delay'
+                : e.type === 'period' ? 'Period'
+                : e.type === 'start' ? 'Kickoff'
+                : 'Full time'
+              );
+              return (
+                <li key={i} className="flex items-center gap-3">
+                  <div className="h-px flex-1 bg-night-50/40" />
+                  <div className="flex items-center gap-2 rounded-full bg-night-100 px-3 py-1 text-[11px] uppercase tracking-wider text-mist">
+                    <span aria-hidden>{EVENT_ICONS[e.type]}</span>
+                    <span>{label}</span>
+                    <span className="font-display font-bold tabular-nums text-gold-bright">{e.stoppage ? `${e.minute}+${e.stoppage}′` : `${e.minute}′`}</span>
+                  </div>
+                  <div className="h-px flex-1 bg-night-50/40" />
+                </li>
+              );
+            }
+
             return (
               <li key={i} className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
                 {/* Left column — home event fills it, away event leaves empty spacer */}
@@ -245,7 +272,7 @@ function EventTimeline({
                     <span aria-hidden>{EVENT_ICONS[e.type]}</span>
                   </span>
                   <span className="font-display text-xs font-bold tabular-nums text-gold-bright">
-                    {e.minute}&#8242;
+                    {e.stoppage ? `${e.minute}+${e.stoppage}′` : `${e.minute}′`}
                   </span>
                 </div>
                 {/* Right column — away event fills it, home event leaves empty spacer */}

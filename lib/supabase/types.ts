@@ -73,9 +73,16 @@ export interface GamecastBundle {
 }
 
 export interface MatchEvent {
+  /** Base minute (e.g. 45 for 45+2, 90 for 90+3). Sorting key. */
   minute: number;
-  type: 'goal' | 'own_goal' | 'penalty' | 'yellow' | 'red' | 'second_yellow' | 'sub';
-  team: 'home' | 'away';
+  /** Stoppage time added to minute (e.g. 3 for 90+3). Undefined when zero or N/A. */
+  stoppage?: number;
+  type:
+    | 'goal' | 'own_goal' | 'penalty'
+    | 'yellow' | 'red' | 'second_yellow'
+    | 'sub' | 'delay' | 'period' | 'start' | 'end';
+  /** 'home'/'away' for player events. Metadata events (delay, period, start, end) have no team. */
+  team?: 'home' | 'away';
   player?: string;
   /** For subs: player going OFF (player = coming ON). Undefined for non-sub events. */
   playerOff?: string;

@@ -250,16 +250,20 @@ const EVENT_TYPE_MAP: Record<string, MatchEvent['type']> = {
   'red-card': 'red',
   'second-yellow-card': 'second_yellow',
   substitution: 'sub',
+  // Metadata events — stored with team=null so the UI renders them centered.
+  'start-delay': 'delay',
+  'end-delay': 'delay',
+  'halftime': 'period',
+  'fulltime': 'period',
+  'start-2nd-half': 'period',
+  'start-extra-time': 'period',
+  'end-regular-time': 'period',
+  'end-sudden-death': 'period',
+  'kickoff': 'start',
 };
 
-// Non-game events to skip entirely (metadata/delays/halftime/etc.)
+// Skip noise-only events that don't add value on the timeline.
 const SKIP_EVENT_TYPES = new Set([
-  'kickoff',
-  'start-delay',
-  'end-delay',
-  'start-2nd-half',
-  'halftime',
-  'fulltime',
   'pause',
   'resume',
   'suspended',
@@ -268,11 +272,8 @@ const SKIP_EVENT_TYPES = new Set([
   'delayed',
   'rain_delay',
   'warmup',
-  'end-regular-time',
-  'start-extra-time',
   'overtime',
   'shootout',
-  'end-sudden-death',
   'end',
 ]);
 
@@ -280,17 +281,16 @@ function isSkippableMeta(type: string): boolean {
   return SKIP_EVENT_TYPES.has(type);
 }
 
-function parseMinute(displayValue: string, period: number): number | null {
+function parseMinute(displayValue: string, _period: number): { base: number; stoppage: number } | null {
   // Examples: "9'", "45'+2'", "65'", "90'+8'"
   const m = displayValue.match(/(\d+)(?:'\+(\d+))?/);
   if (!m) return null;
   const base = Number(m[1]);
-  const extra = m[2] ? Number(m[2]) : 0;
+  const stoppage = m[2] ? Number(m[2]) : 0;
   if (!Number.isFinite(base)) return null;
-  // ESPN's base already accounts for first vs second half (e.g. 65' in P2 is 65).
-  // First-half stoppage minutes (e.g. 45'+2') we collapse onto 45 so the
-  // timeline UI doesn't mis-order them.
-  return period === 1 && base === 45 ? 45 + extra : base;
+  // ESPN's base already accounts for second half: 65' in P2 is 65, not 110.
+  // Keep 45'+2' as {base:45, stoppage:2} so the UI renders "45+2'".
+  return { base, stoppage: stoppage > 0 ? stoppage : 0 };
 }
 
 interface RawCommentary {
@@ -627,44 +627,75 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
   const homeTeamId = homeRaw?.team?.id;
   const awayTeamId = awayRaw?.team?.id;
 
+  const META_DETAIL: Record<string, string> = {
+    'start-delay': 'Delay',
+    'end-delay': 'Delay over',
+    'halftime': 'Half time',
+    'fulltime': 'Full time',
+    'start-2nd-half': 'Second half',
+    'start-extra-time': 'Extra time',
+    'end-regular-time': 'End of 90',
+    'end-sudden-death': 'End of extra time',
+    'kickoff': 'Kickoff',
+  };
+
   const events: Array<MatchEvent & { teamAbbr?: string }> = [];
   for (const ke of data.keyEvents ?? []) {
-    const mapped = EVENT_TYPE_MAP[ke.type?.type ?? ''];
+    const type = ke.type?.type ?? '';
+    if (isSkippableMeta(type)) continue;
+
+    const mapped = EVENT_TYPE_MAP[type];
     if (!mapped) continue;
     const minute = parseMinute(ke.clock?.displayValue ?? '', ke.period?.number ?? 1);
     if (minute == null) continue;
-    const teamAbbr = ke.team?.abbreviation;
-    const playerName = ke.text?.match(/^(?:Goal! [^.]+\.\s*)?([\p{L} '\-.]+?)\s+\(/u)?.[1]?.trim();
 
-    // Match event team using ESPN's team.id (always present) against the
-    // roster team IDs extracted above. This is the most reliable signal.
-    const teamId = ke.team?.id;
-    let side: 'home' | 'away' = 'away';
-    if (teamId && teamId === homeTeamId) {
-      side = 'home';
-    } else if (teamId && teamId === awayTeamId) {
-      side = 'away';
+    const isMeta = mapped === 'delay' || mapped === 'period' || mapped === 'start' || mapped === 'end';
+
+    let side: 'home' | 'away' | undefined;
+    let playerName: string | undefined;
+    let playerOff: string | undefined;
+
+    if (isMeta) {
+      // Metadata events render centered, no team or player
+      side = undefined;
     } else {
-      // Fallback to abbreviation match for edge cases
-      const teamAbbrUpper = teamAbbr?.toUpperCase() ?? '';
-      const homeUpper = homeAbbr?.toUpperCase() ?? '';
-      const awayUpper = awayAbbr?.toUpperCase() ?? '';
-      if (teamAbbrUpper && homeUpper && teamAbbrUpper === homeUpper) {
+      const teamAbbr = ke.team?.abbreviation;
+      playerName = ke.text?.match(/^(?:Goal! [^.]+\.\s*)?([\p{L} '\-.]+?)\s+\(/u)?.[1]?.trim();
+
+      const teamId = ke.team?.id;
+      if (teamId && teamId === homeTeamId) {
         side = 'home';
-      } else if (teamAbbrUpper && awayUpper && teamAbbrUpper === awayUpper) {
+      } else if (teamId && teamId === awayTeamId) {
         side = 'away';
+      } else {
+        const teamAbbrUpper = teamAbbr?.toUpperCase() ?? '';
+        const homeUpper = homeAbbr?.toUpperCase() ?? '';
+        const awayUpper = awayAbbr?.toUpperCase() ?? '';
+        side = 'away';
+        if (teamAbbrUpper && homeUpper && teamAbbrUpper === homeUpper) side = 'home';
+        else if (teamAbbrUpper && awayUpper && teamAbbrUpper === awayUpper) side = 'away';
+      }
+
+      if (mapped === 'sub') {
+        playerOff = ke.participants?.[1]?.athlete?.displayName?.trim();
       }
     }
 
-    // For substitutions: ESPN participants[0] = coming ON, participants[1] = going OFF
-    const playerOff =
-      mapped === 'sub'
-        ? ke.participants?.[1]?.athlete?.displayName?.trim()
-        : undefined;
-
-    events.push({ minute, type: mapped, team: side, player: playerName, teamAbbr, ...(playerOff ? { playerOff } : {}) });
+    events.push({
+      minute: minute.base,
+      stoppage: minute.stoppage > 0 ? minute.stoppage : undefined,
+      type: mapped,
+      team: side,
+      player: playerName,
+      playerOff,
+      detail: isMeta
+        ? (ke.text?.trim() || META_DETAIL[type] || type)
+        : undefined,
+      teamAbbr: ke.team?.abbreviation,
+    });
   }
-  events.sort((a, b) => a.minute - b.minute);
+  // Sort by base minute, then stoppage ascending within same minute.
+  events.sort((a, b) => a.minute - b.minute || (a.stoppage ?? 0) - (b.stoppage ?? 0));
 
   const commentary = parseCommentary(data.commentary);
   const teamStats = parseTeamStats(data.boxscore?.teams);

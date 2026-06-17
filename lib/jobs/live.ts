@@ -173,10 +173,14 @@ async function tickOneMatch(
   if (data.events.length > 0) {
     const events = data.events.map((e) => ({
       minute: e.minute,
+      stoppage: e.stoppage,
       type: e.type,
-      team: flipped ? (e.team === 'home' ? 'away' : 'home') : e.team,
+      team: e.team
+        ? (flipped ? (e.team === 'home' ? 'away' : 'home') : e.team)
+        : undefined,
       player: e.player,
       playerOff: e.playerOff,
+      detail: e.detail,
     }));
     update.events = events;
   }
