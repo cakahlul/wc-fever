@@ -195,6 +195,14 @@ function EventTimeline({
 }) {
   return (
     <div className="rounded-2xl border border-night-50/60 bg-night-200 p-4">
+      <div className="mb-3 flex items-center justify-between text-xs uppercase tracking-wider text-mist">
+        <span className="flex items-center gap-1.5">
+          <span aria-hidden>{homeFlag ?? ''}</span> {homeCode}
+        </span>
+        <span className="flex items-center gap-1.5">
+          {awayCode} <span aria-hidden>{awayFlag ?? ''}</span>
+        </span>
+      </div>
       <div className="relative">
         <div
           aria-hidden
@@ -204,20 +212,30 @@ function EventTimeline({
           {events.map((e, i) => {
             const isHome = e.team === 'home';
             const isGoal = e.type === 'goal' || e.type === 'penalty' || e.type === 'own_goal';
-            const flagSide = isHome ? homeFlag : awayFlag;
-            const codeSide = isHome ? homeCode : awayCode;
+            const flag = isHome ? homeFlag : awayFlag;
+            const code = isHome ? homeCode : awayCode;
+            const textColor = isGoal ? 'text-gold-bright' : 'text-ice';
             return (
               <li key={i} className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-                <div className={`flex items-center gap-2 ${isHome ? 'justify-end text-right' : 'invisible'}`}>
-                  <div>
-                    <p className={`text-sm font-bold ${isGoal ? 'text-gold-bright' : 'text-ice'}`}>
-                      {e.player ?? e.type}
-                    </p>
+                {/* Left column — home event fills it, away event leaves empty spacer */}
+                {isHome ? (
+                  <div className="flex flex-col items-end text-right">
+                    <p className={`text-sm font-bold ${textColor}`}>{e.player ?? e.type}</p>
+                    {e.playerOff && <p className="text-[10px] text-mist" aria-label="replacing">{e.playerOff}</p>}
                     <p className="text-[10px] uppercase tracking-wider text-mist">
-                      <span aria-hidden>{flagSide}</span> {codeSide}
+                      <span aria-hidden>{flag ?? ''}</span> {code}
                     </p>
                   </div>
-                </div>
+                ) : (
+                  <div aria-hidden className="invisible">
+                    <p className="text-sm font-bold">{e.player ?? e.type}</p>
+                    {e.playerOff && <p className="text-[10px]">{e.playerOff}</p>}
+                    <p className="text-[10px] uppercase tracking-wider">
+                      <span>{flag ?? ''}</span> {code}
+                    </p>
+                  </div>
+                )}
+                {/* Center — icon + minute */}
                 <div className="flex flex-col items-center gap-0.5">
                   <span
                     className={`flex h-9 w-9 items-center justify-center rounded-full text-sm shadow-glow ${
@@ -230,16 +248,24 @@ function EventTimeline({
                     {e.minute}&#8242;
                   </span>
                 </div>
-                <div className={`flex items-center gap-2 ${!isHome ? 'justify-start text-left' : 'invisible'}`}>
-                  <div>
-                    <p className={`text-sm font-bold ${isGoal ? 'text-gold-bright' : 'text-ice'}`}>
-                      {e.player ?? e.type}
-                    </p>
+                {/* Right column — away event fills it, home event leaves empty spacer */}
+                {!isHome ? (
+                  <div className="flex flex-col items-start text-left">
+                    <p className={`text-sm font-bold ${textColor}`}>{e.player ?? e.type}</p>
+                    {e.playerOff && <p className="text-[10px] text-mist" aria-label="replacing">{e.playerOff}</p>}
                     <p className="text-[10px] uppercase tracking-wider text-mist">
-                      <span aria-hidden>{flagSide}</span> {codeSide}
+                      <span aria-hidden>{flag ?? ''}</span> {code}
                     </p>
                   </div>
-                </div>
+                ) : (
+                  <div aria-hidden className="invisible">
+                    <p className="text-sm font-bold">{e.player ?? e.type}</p>
+                    {e.playerOff && <p className="text-[10px]">{e.playerOff}</p>}
+                    <p className="text-[10px] uppercase tracking-wider">
+                      <span>{flag ?? ''}</span> {code}
+                    </p>
+                  </div>
+                )}
               </li>
             );
           })}

@@ -86,7 +86,7 @@ export function ScheduleList({
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-bold">Schedule</h1>
+          <h1 className="font-display text-2xl font-bold">Fixtures & Results</h1>
           <p className="text-sm text-mist">
             {filtered.length} of {matches.length} matches · times shown in your timezone
           </p>

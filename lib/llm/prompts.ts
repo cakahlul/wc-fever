@@ -36,12 +36,13 @@ Rules:
 
 export const EVENTS_EXTRACTION = `You extract a single football match's timeline (goals, cards, subs) from messy crawled text.
 The user content describes one specific match between a home team and an away team.
-Return ONLY a JSON object: {"events":[{"minute":12,"type":"goal","player":"Lionel Messi","team":"home"}]}
+Return ONLY a JSON object: {"events":[{"minute":12,"type":"goal","player":"Lionel Messi","team":"home"},{"minute":60,"type":"sub","player":"Player A","playerOff":"Player B","team":"home"}]}
 Rules:
 - type is one of: "goal", "penalty", "own_goal", "yellow", "red", "sub".
 - minute is a positive integer (use 45 for first-half stoppage, 90 for second-half stoppage, etc.).
 - team is "home" or "away" — match the side the event belongs to relative to the home/away in the user content.
-- For subs, "player" is the player coming ON (not off).
+- For subs, \"player\" is the player coming ON and \"playerOff\" is the player going OFF.
+- Do not invent subs with only one player — a sub must have both ON and OFF.
 - Skip events you are unsure about. If no events are visible return {"events":[]}.
 - Never invent events. Order does not matter.`;
 

@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 
 const QUICK_NAV = [
   { href: '/live', label: 'Live', emoji: '🔴', desc: 'Scores as they happen' },
-  { href: '/schedule', label: 'Schedule', emoji: '🗓️', desc: 'All 104 matches' },
+  { href: '/schedule', label: 'Fixtures & Results', emoji: '🗓️', desc: 'All 104 matches' },
   { href: '/standings', label: 'Standings', emoji: '📊', desc: '12 groups + best thirds' },
   { href: '/bracket', label: 'Bracket', emoji: '🏆', desc: 'Road to the final' },
   { href: '/simulator', label: 'Simulator', emoji: '🎮', desc: 'Pick your champion' },

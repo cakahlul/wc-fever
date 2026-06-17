@@ -77,6 +77,8 @@ export interface MatchEvent {
   type: 'goal' | 'own_goal' | 'penalty' | 'yellow' | 'red' | 'second_yellow' | 'sub';
   team: 'home' | 'away';
   player?: string;
+  /** For subs: player going OFF (player = coming ON). Undefined for non-sub events. */
+  playerOff?: string;
   detail?: string;
 }
 

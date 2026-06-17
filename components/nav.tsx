@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 const LINKS = [
   { href: '/', label: 'Home', icon: '🏠' },
   { href: '/live', label: 'Live', icon: '🔴' },
-  { href: '/schedule', label: 'Schedule', icon: '🗓️' },
+  { href: '/schedule', label: 'Fixtures & Results', icon: '🗓️' },
   { href: '/standings', label: 'Standings', icon: '📊' },
   { href: '/bracket', label: 'Bracket', icon: '🏆' },
   { href: '/simulator', label: 'Simulator', icon: '🎮' },

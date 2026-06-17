@@ -181,6 +181,7 @@ interface RawRosterPlayer {
 
 interface RawRoster {
   homeAway: 'home' | 'away';
+  team?: { id?: string; abbreviation?: string; displayName?: string };
   formation?: string;
   roster: RawRosterPlayer[];
 }
@@ -233,7 +234,8 @@ interface RawKeyEvent {
   period: { number: number };
   clock: { displayValue: string };
   text?: string;
-  team?: { abbreviation?: string; displayName?: string };
+  team?: { id?: string; abbreviation?: string; displayName?: string };
+  participants?: Array<{ athlete?: { id?: string; displayName?: string } }>;
 }
 
 const EVENT_TYPE_MAP: Record<string, MatchEvent['type']> = {
@@ -241,6 +243,7 @@ const EVENT_TYPE_MAP: Record<string, MatchEvent['type']> = {
   'goal---header': 'goal',
   'goal---penalty': 'penalty',
   'penalty-scored': 'penalty',
+  'penalty-miss': 'penalty',
   'goal---own-goal': 'own_goal',
   'own-goal': 'own_goal',
   'yellow-card': 'yellow',
@@ -248,6 +251,34 @@ const EVENT_TYPE_MAP: Record<string, MatchEvent['type']> = {
   'second-yellow-card': 'second_yellow',
   substitution: 'sub',
 };
+
+// Non-game events to skip entirely (metadata/delays/halftime/etc.)
+const SKIP_EVENT_TYPES = new Set([
+  'kickoff',
+  'start-delay',
+  'end-delay',
+  'start-2nd-half',
+  'halftime',
+  'fulltime',
+  'pause',
+  'resume',
+  'suspended',
+  'postponed',
+  'cancelled',
+  'delayed',
+  'rain_delay',
+  'warmup',
+  'end-regular-time',
+  'start-extra-time',
+  'overtime',
+  'shootout',
+  'end-sudden-death',
+  'end',
+]);
+
+function isSkippableMeta(type: string): boolean {
+  return SKIP_EVENT_TYPES.has(type);
+}
 
 function parseMinute(displayValue: string, period: number): number | null {
   // Examples: "9'", "45'+2'", "65'", "90'+8'"
@@ -564,7 +595,7 @@ export async function espnFetchRoster(espnTeamId: string): Promise<EspnRosterPla
 export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayAbbr?: string): Promise<{
   home: EspnLineupSide | null;
   away: EspnLineupSide | null;
-  events: Array<MatchEvent & { teamAbbr?: string }>;
+  events: Array<MatchEvent & { teamAbbr?: string; playerOff?: string }>;
   commentary: CommentaryEntry[];
   playerStats: PlayerStatsBundle;
   teamStats: TeamStatsBundle;
@@ -592,6 +623,10 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
   const home = homeRaw ? parseRoster(homeRaw) : null;
   const away = awayRaw ? parseRoster(awayRaw) : null;
 
+  // Get ESPN team IDs from rosters to match keyEvents by team ID.
+  const homeTeamId = homeRaw?.team?.id;
+  const awayTeamId = awayRaw?.team?.id;
+
   const events: Array<MatchEvent & { teamAbbr?: string }> = [];
   for (const ke of data.keyEvents ?? []) {
     const mapped = EVENT_TYPE_MAP[ke.type?.type ?? ''];
@@ -599,15 +634,35 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
     const minute = parseMinute(ke.clock?.displayValue ?? '', ke.period?.number ?? 1);
     if (minute == null) continue;
     const teamAbbr = ke.team?.abbreviation;
-    const playerMatch = ke.text?.match(/^(?:Goal! [^.]+\.\s*)?([\p{L} '\-.]+?)\s+\(/u);
-    const player = playerMatch?.[1]?.trim();
-    events.push({
-      minute,
-      type: mapped,
-      team: teamAbbr && homeAbbr && teamAbbr.toUpperCase() === homeAbbr.toUpperCase() ? 'home' : 'away',
-      player,
-      teamAbbr,
-    });
+    const playerName = ke.text?.match(/^(?:Goal! [^.]+\.\s*)?([\p{L} '\-.]+?)\s+\(/u)?.[1]?.trim();
+
+    // Match event team using ESPN's team.id (always present) against the
+    // roster team IDs extracted above. This is the most reliable signal.
+    const teamId = ke.team?.id;
+    let side: 'home' | 'away' = 'away';
+    if (teamId && teamId === homeTeamId) {
+      side = 'home';
+    } else if (teamId && teamId === awayTeamId) {
+      side = 'away';
+    } else {
+      // Fallback to abbreviation match for edge cases
+      const teamAbbrUpper = teamAbbr?.toUpperCase() ?? '';
+      const homeUpper = homeAbbr?.toUpperCase() ?? '';
+      const awayUpper = awayAbbr?.toUpperCase() ?? '';
+      if (teamAbbrUpper && homeUpper && teamAbbrUpper === homeUpper) {
+        side = 'home';
+      } else if (teamAbbrUpper && awayUpper && teamAbbrUpper === awayUpper) {
+        side = 'away';
+      }
+    }
+
+    // For substitutions: ESPN participants[0] = coming ON, participants[1] = going OFF
+    const playerOff =
+      mapped === 'sub'
+        ? ke.participants?.[1]?.athlete?.displayName?.trim()
+        : undefined;
+
+    events.push({ minute, type: mapped, team: side, player: playerName, teamAbbr, ...(playerOff ? { playerOff } : {}) });
   }
   events.sort((a, b) => a.minute - b.minute);
 

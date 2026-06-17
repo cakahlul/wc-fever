@@ -459,6 +459,7 @@ export async function runBootstrap() {
           type: e.type,
           team: flipped ? (e.team === 'home' ? 'away' : 'home') : e.team,
           player: e.player,
+          playerOff: e.playerOff,
         }));
         const { error } = await db.from('matches').update({ events }).eq('id', m.id);
         if (!error) {

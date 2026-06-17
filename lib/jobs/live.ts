@@ -176,6 +176,7 @@ async function tickOneMatch(
       type: e.type,
       team: flipped ? (e.team === 'home' ? 'away' : 'home') : e.team,
       player: e.player,
+      playerOff: e.playerOff,
     }));
     update.events = events;
   }

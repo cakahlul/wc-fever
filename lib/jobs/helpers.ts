@@ -98,7 +98,7 @@ export async function extractValidatedEvents(text: string): Promise<MatchEvent[]
   const { extractJSON } = await import('@/lib/llm');
   const { EVENTS_EXTRACTION } = await import('@/lib/llm/prompts');
   const extracted = await extractJSON<{
-    events: Array<{ minute: number; type: string; player?: string; team: string }>;
+    events: Array<{ minute: number; type: string; player?: string; playerOff?: string; team: string }>;
   }>(EVENTS_EXTRACTION, text);
   const events: MatchEvent[] = [];
   for (const e of extracted?.events ?? []) {
@@ -110,6 +110,7 @@ export async function extractValidatedEvents(text: string): Promise<MatchEvent[]
       type: e.type as MatchEvent['type'],
       team: e.team,
       player: e.player,
+      playerOff: e.playerOff,
     });
   }
   events.sort((a, b) => a.minute - b.minute);
