@@ -336,6 +336,66 @@ interface RawPickcenter {
   awayTeamOdds?: { moneyLine?: number };
 }
 
+interface RawArticle {
+  type?: string;
+  headline?: string;
+  byline?: string;
+  published?: string;
+  story?: string;
+}
+
+export interface EspnRecap {
+  headline: string;
+  /** Story paragraphs, plain text, joined with blank lines. */
+  body: string;
+  byline: string | null;
+  published: string | null;
+}
+
+const HTML_ENTITIES: Record<string, string> = {
+  '&nbsp;': ' ',
+  '&amp;': '&',
+  '&quot;': '"',
+  '&#39;': '’',
+  '&rsquo;': '’',
+  '&lsquo;': '‘',
+  '&rdquo;': '”',
+  '&ldquo;': '“',
+  '&apos;': '’',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&ndash;': '–',
+  '&mdash;': '—',
+};
+
+/** Strip ESPN's recap HTML (<p>/<a>) into clean plain-text paragraphs. */
+function htmlToParagraphs(html: string): string[] {
+  return html
+    .split(/<\/p>/i)
+    .map((chunk) =>
+      chunk
+        .replace(/<[^>]+>/g, '')
+        .replace(/&#?\w+;/g, (m) => HTML_ENTITIES[m] ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+    .filter(Boolean);
+}
+
+/** ESPN match recap article. Only the post-match "Recap" type is accepted. */
+function parseRecap(article: RawArticle | undefined): EspnRecap | null {
+  if (!article || article.type !== 'Recap') return null;
+  const headline = article.headline?.trim() ?? '';
+  const body = htmlToParagraphs(article.story ?? '').join('\n\n');
+  if (!headline && !body) return null;
+  return {
+    headline,
+    body,
+    byline: article.byline?.trim() || null,
+    published: article.published ?? null,
+  };
+}
+
 interface RawLeader {
   team?: { abbreviation?: string };
   leaders?: Array<{
@@ -615,8 +675,10 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
   teamStats: TeamStatsBundle;
   odds: OddsBundle;
   gamecast: GamecastBundle;
+  recap: EspnRecap | null;
 } | null> {
   const data = (await espnGet(`/summary?event=${eventId}`)) as {
+    article?: RawArticle;
     rosters?: RawRoster[];
     keyEvents?: RawKeyEvent[];
     commentary?: RawCommentary[];
@@ -679,7 +741,10 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
       side = undefined;
     } else {
       const teamAbbr = ke.team?.abbreviation;
-      playerName = ke.text?.match(/^(?:Goal! [^.]+\.\s*)?([\p{L} '\-.]+?)\s+\(/u)?.[1]?.trim();
+      playerName =
+        mapped === 'own_goal'
+          ? ke.text?.match(/^Own Goal by ([\p{L} '\-.]+?),/u)?.[1]?.trim()
+          : ke.text?.match(/^(?:Goal! [^.]+\.\s*)?([\p{L} '\-.]+?)\s+\(/u)?.[1]?.trim();
 
       const teamId = ke.team?.id;
       if (teamId && teamId === homeTeamId) {
@@ -758,5 +823,7 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
     awayAbbr ?? ''
   );
 
-  return { home, away, events, commentary, playerStats, teamStats, odds, gamecast };
+  const recap = parseRecap(data.article);
+
+  return { home, away, events, commentary, playerStats, teamStats, odds, gamecast, recap };
 }

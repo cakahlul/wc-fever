@@ -82,11 +82,14 @@ export async function runReconcile() {
 
   // ---- 2. Missing reviews / hype blurbs ----
   const withTeams = joinMatchTeams(matches, teams);
-  const { data: existing } = await db.from('match_reviews').select('match_id, generated_at');
+  const { data: existing } = await db.from('match_reviews').select('match_id, generated_at, source');
   const reviewedAt = new Map((existing ?? []).map((r) => [r.match_id, r.generated_at]));
+  const espnReviewed = new Set((existing ?? []).filter((r) => r.source === 'espn').map((r) => r.match_id));
   for (const m of withTeams) {
     try {
       if (m.status === 'finished') {
+        // An ESPN recap is authoritative — never regenerate an LLM review over it.
+        if (espnReviewed.has(m.id)) continue;
         // A blurb written pre-match doesn't count as the final review —
         // regenerate if the cached row predates full time (match updated_at).
         const cachedAt = reviewedAt.get(m.id);

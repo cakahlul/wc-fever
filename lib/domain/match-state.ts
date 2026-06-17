@@ -11,8 +11,9 @@ export interface Scorer {
 const GOAL_TYPES = new Set<MatchEvent['type']>(['goal', 'penalty', 'own_goal']);
 
 /**
- * Goals split by the side they count FOR. Own goals are credited to the
- * opponent so the per-side counts stay in sync with the scoreline.
+ * Goals split by the side they count FOR. ESPN already attributes own-goal
+ * events to the beneficiary team (`team` = the side that gets the goal), so we
+ * use `e.team` as-is — no flip — keeping per-side counts in sync with the score.
  */
 export function goalScorers(events: MatchEvent[] | null | undefined): {
   home: Scorer[];
@@ -23,7 +24,7 @@ export function goalScorers(events: MatchEvent[] | null | undefined): {
   for (const e of events ?? []) {
     if (!GOAL_TYPES.has(e.type)) continue;
     if (e.team !== 'home' && e.team !== 'away') continue;
-    const side = e.type === 'own_goal' ? (e.team === 'home' ? 'away' : 'home') : e.team;
+    const side = e.team;
     const minute = formatMatchMinute(e.minute, e.stoppage) ?? `${e.minute}'`;
     const suffix = e.type === 'penalty' ? ' (P)' : e.type === 'own_goal' ? ' (OG)' : '';
     (side === 'home' ? home : away).push({ player: (e.player?.trim() || 'Goal') + suffix, minute });

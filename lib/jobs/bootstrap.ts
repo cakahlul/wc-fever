@@ -8,7 +8,7 @@ import { espnFetchSummary, espnFindEvent } from '@/lib/crawl/espn-adapter';
 import { extractJSON } from '@/lib/llm';
 import { SCHEDULE_EXTRACTION, SQUAD_EXTRACTION, LIVE_SCORE_EXTRACTION } from '@/lib/llm/prompts';
 import { matchFixture, matchTeam, type ExtractedLiveScores } from './helpers';
-import { generateMatchReview, generateHypeBlurb } from './reviews';
+import { generateMatchReview, generateHypeBlurb, storeEspnRecap } from './reviews';
 import { GROUPS } from '@/lib/domain/standings';
 import { isBigMatch } from '@/lib/domain/big-match';
 import { resolveBracket } from '@/lib/domain/bracket';
@@ -357,6 +357,15 @@ export async function runBootstrap() {
       !(g.officials?.length)
     );
   };
+  // Finished matches still lacking an authoritative ESPN recap must be re-fetched
+  // even if all their other extras are already populated — otherwise a complete
+  // match is never an espnCandidate and the recap is never pulled.
+  const { data: espnReviewRows } = await db
+    .from('match_reviews')
+    .select('match_id, source');
+  const hasEspnRecap = new Set(
+    (espnReviewRows ?? []).filter((r) => r.source === 'espn').map((r) => r.match_id)
+  );
   const needsExtras = (m: typeof matches[number]) => {
     if (!lineupSet.has(m.id)) return true;
     if (Array.isArray(m.events) && m.events.length === 0) return true;
@@ -369,7 +378,7 @@ export async function runBootstrap() {
   };
   const espnCandidates = matches.filter((m) => {
     if (!m.home_team_id || !m.away_team_id || !m.kickoff_utc) return false;
-    if (m.status === 'finished') return needsExtras(m);
+    if (m.status === 'finished') return needsExtras(m) || !hasEspnRecap.has(m.id);
     if (m.status === 'scheduled') {
       return isEmptyOdds(m.odds) || isEmptyGamecast(m.gamecast);
     }
@@ -425,6 +434,16 @@ export async function runBootstrap() {
           log(`    extras: saved (${Object.keys(updateExtras).join(', ')})`);
         } else log(`    extras update error: ${error.message}`);
       }
+      // -- ESPN recap (authoritative review for finished matches) --
+      if (m.status === 'finished' && summary_.recap) {
+        if (await storeEspnRecap(db, m.id, summary_.recap)) {
+          summary.reviewsGenerated++;
+          revalidateTag('matches:all');
+          revalidateTag(`review:${m.id}`);
+          log(`    recap: stored ESPN review`);
+        }
+      }
+
       const ourHomeSide = flipped ? summary_.away : summary_.home;
       const ourAwaySide = flipped ? summary_.home : summary_.away;
 

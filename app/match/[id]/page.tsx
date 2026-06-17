@@ -34,6 +34,7 @@ export default async function MatchPage({ params }: { params: { id: string } }) 
         homeSquad={homeSquad}
         awaySquad={awaySquad}
         reviewBody={review?.body ?? null}
+        reviewSource={review?.source ?? null}
       />
 
       <div className="flex gap-4 text-sm">

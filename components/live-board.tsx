@@ -3,8 +3,10 @@
 import { useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useLiveMatches } from '@/lib/hooks/use-live-matches';
+import { useGoalCelebration } from '@/lib/hooks/use-goal-celebration';
 import type { Match, MatchWithTeams, Team } from '@/lib/supabase/types';
 import { MatchCard } from './match-card';
+import { GoalGimmick } from './goal-gimmick';
 import { EmptyState } from './skeleton';
 
 /**
@@ -35,6 +37,7 @@ export function LiveBoard({
 
   const now = Date.now();
   const live = withTeams.filter((m) => m.status === 'live');
+  const celebration = useGoalCelebration(live);
   const recentlyFinished = withTeams
     .filter(
       (m) =>
@@ -63,7 +66,10 @@ export function LiveBoard({
         </span>
       </div>
 
-      <section aria-labelledby="live-now">
+      <section aria-labelledby="live-now" className="relative">
+        <AnimatePresence>
+          {celebration && <GoalGimmick celebration={celebration} variant="section" />}
+        </AnimatePresence>
         <h2 id="live-now" className="mb-3 flex items-center gap-2 font-display text-lg font-bold">
           <span aria-hidden className="h-2.5 w-2.5 rounded-full bg-live animate-live-pulse" />
           On now

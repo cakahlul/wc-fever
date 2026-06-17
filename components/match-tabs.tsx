@@ -31,6 +31,7 @@ export interface MatchTabsProps {
   homeSquad: Player[];
   awaySquad: Player[];
   reviewBody: string | null;
+  reviewSource: string | null;
 }
 
 const EVENT_ICONS: Record<string, string> = {
@@ -47,7 +48,7 @@ const EVENT_ICONS: Record<string, string> = {
   end: '🛑',
 };
 
-export function MatchTabs({ match, lineups, homeSquad, awaySquad, reviewBody }: MatchTabsProps) {
+export function MatchTabs({ match, lineups, homeSquad, awaySquad, reviewBody, reviewSource }: MatchTabsProps) {
   const finished = match.status === 'finished';
   const live = match.status === 'live';
 
@@ -123,9 +124,7 @@ export function MatchTabs({ match, lineups, homeSquad, awaySquad, reviewBody }: 
       {/* Active panel */}
       <div role="tabpanel" id={`panel-${currentTab.key}`} aria-labelledby={`tab-${currentTab.key}`}>
         {currentTab.key === 'overview' && reviewBody && (
-          <div className="rounded-2xl border border-gold/30 bg-night-200 p-5">
-            <p className="leading-relaxed text-ice/90">{reviewBody}</p>
-          </div>
+          <ReviewPanel body={reviewBody} fromEspn={reviewSource === 'espn'} />
         )}
 
         {currentTab.key === 'gamecast' && match.gamecast && (
@@ -183,6 +182,34 @@ export function MatchTabs({ match, lineups, homeSquad, awaySquad, reviewBody }: 
 }
 
 // ----------------------------- sub-components -----------------------------
+
+/**
+ * Review/Hype panel. ESPN recaps are stored as `headline\n\n story-paragraphs`;
+ * render the first chunk as a headline and the rest as paragraphs, with a "via
+ * ESPN" credit. LLM fallback bodies are plain paragraphs with no headline.
+ */
+function ReviewPanel({ body, fromEspn }: { body: string; fromEspn: boolean }) {
+  const chunks = body.split('\n\n').map((p) => p.trim()).filter(Boolean);
+  const headline = fromEspn ? chunks[0] : null;
+  const paragraphs = fromEspn ? chunks.slice(1) : chunks;
+  return (
+    <div className="rounded-2xl border border-gold/30 bg-night-200 p-5">
+      {headline && (
+        <h3 className="mb-3 font-display text-lg font-extrabold leading-snug text-gold-bright">{headline}</h3>
+      )}
+      <div className="space-y-3">
+        {paragraphs.map((p, i) => (
+          <p key={i} className="leading-relaxed text-ice/90">
+            {p}
+          </p>
+        ))}
+      </div>
+      {fromEspn && (
+        <p className="mt-4 text-right text-[10px] uppercase tracking-wider text-mist">via ESPN</p>
+      )}
+    </div>
+  );
+}
 
 /**
  * Player name(s) for a timeline event. For subs, `player` is coming ON and

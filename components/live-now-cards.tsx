@@ -1,9 +1,25 @@
 'use client';
 
 import { useMemo } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { useLiveMatches } from '@/lib/hooks/use-live-matches';
+import { useGoalCelebration } from '@/lib/hooks/use-goal-celebration';
 import type { Match, MatchWithTeams, Team } from '@/lib/supabase/types';
 import { MatchCard } from './match-card';
+import { GoalGimmick } from './goal-gimmick';
+
+/** A live card with its own goal celebration scoped to the card. */
+function LiveCard({ match }: { match: MatchWithTeams }) {
+  const celebration = useGoalCelebration([match]);
+  return (
+    <div className="relative">
+      <MatchCard match={match} />
+      <AnimatePresence>
+        {celebration && <GoalGimmick celebration={celebration} variant="card" />}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 /**
  * Home-page "Live now" section, kept in sync with the match detail scoreboard
@@ -43,7 +59,7 @@ export function LiveNowCards({
       </h2>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {live.map((m) => (
-          <MatchCard key={m.id} match={m} />
+          <LiveCard key={m.id} match={m} />
         ))}
       </div>
     </section>

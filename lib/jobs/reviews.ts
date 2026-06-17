@@ -4,13 +4,37 @@ import type { Database, MatchWithTeams } from '@/lib/supabase/types';
 import { generateProse } from '@/lib/llm';
 import { HYPE_BLURB, MATCH_REVIEW } from '@/lib/llm/prompts';
 import { isBigMatch } from '@/lib/domain/big-match';
+import type { EspnRecap } from '@/lib/crawl/espn-adapter';
 
 /**
  * match_reviews holds ONE row per match (PK match_id), reused across the
  * match lifecycle: a hype blurb before kickoff (big matches only), replaced
- * by the full review once the match finishes. Generated once, cached forever
- * — jobs always check for an existing row of the right vintage first.
+ * by the full review once the match finishes. `source` distinguishes the
+ * authoritative ESPN recap ('espn') from the LLM fallback ('generated') so
+ * the recap is never overwritten and jobs stop re-crawling once it's stored.
  */
+
+/**
+ * Store ESPN's post-match recap as the match review. Body is the headline
+ * followed by the story paragraphs (blank-line separated); the UI splits it
+ * back out. Authoritative for finished matches — overwrites any LLM fallback.
+ */
+export async function storeEspnRecap(
+  db: SupabaseClient<Database>,
+  matchId: string,
+  recap: EspnRecap
+): Promise<boolean> {
+  const body = recap.headline ? `${recap.headline}\n\n${recap.body}` : recap.body;
+  if (!body.trim()) return false;
+  const { error } = await db.from('match_reviews').upsert({
+    match_id: matchId,
+    body,
+    language: 'en',
+    source: 'espn',
+    generated_at: new Date().toISOString(),
+  });
+  return !error;
+}
 
 export async function generateMatchReview(
   db: SupabaseClient<Database>,
@@ -35,7 +59,7 @@ export async function generateMatchReview(
 
   const { error } = await db
     .from('match_reviews')
-    .upsert({ match_id: match.id, body, language: 'en', generated_at: new Date().toISOString() });
+    .upsert({ match_id: match.id, body, language: 'en', source: 'generated', generated_at: new Date().toISOString() });
   return !error;
 }
 
@@ -61,6 +85,6 @@ export async function generateHypeBlurb(
 
   const { error } = await db
     .from('match_reviews')
-    .upsert({ match_id: match.id, body, language: 'en', generated_at: new Date().toISOString() });
+    .upsert({ match_id: match.id, body, language: 'en', source: 'generated', generated_at: new Date().toISOString() });
   return !error;
 }

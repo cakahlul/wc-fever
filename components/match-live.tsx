@@ -1,11 +1,14 @@
 'use client';
 
 import { useMemo } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { useLiveMatches } from '@/lib/hooks/use-live-matches';
 import { useLiveLineups } from '@/lib/hooks/use-live-lineups';
+import { useGoalCelebration } from '@/lib/hooks/use-goal-celebration';
 import type { LineupEntry, Match, MatchWithTeams, Player, Team } from '@/lib/supabase/types';
 import { MatchScoreboard } from './match-scoreboard';
 import { MatchTabs } from './match-tabs';
+import { GoalGimmick } from './goal-gimmick';
 
 /**
  * Live wrapper for the match detail page. Owns a single realtime subscription
@@ -21,6 +24,7 @@ export function MatchLive({
   homeSquad,
   awaySquad,
   reviewBody,
+  reviewSource,
 }: {
   initialMatch: Match;
   teams: Team[];
@@ -28,6 +32,7 @@ export function MatchLive({
   homeSquad: Player[];
   awaySquad: Player[];
   reviewBody: string | null;
+  reviewSource: string | null;
 }) {
   const { matches } = useLiveMatches([initialMatch]);
   const lineups = useLiveLineups(initialMatch.id, initialLineups);
@@ -42,8 +47,13 @@ export function MatchLive({
     };
   }, [matches, initialMatch, teamsById]);
 
+  const celebration = useGoalCelebration([match]);
+
   return (
     <>
+      <AnimatePresence>
+        {celebration && <GoalGimmick celebration={celebration} variant="page" />}
+      </AnimatePresence>
       <MatchScoreboard match={match} />
       <MatchTabs
         match={match}
@@ -51,6 +61,7 @@ export function MatchLive({
         homeSquad={homeSquad}
         awaySquad={awaySquad}
         reviewBody={reviewBody}
+        reviewSource={reviewSource}
       />
     </>
   );

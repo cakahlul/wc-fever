@@ -3,7 +3,7 @@ import { revalidateTag } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/server';
 import { joinMatchTeams } from '@/lib/supabase/queries';
 import { espnFetchSummary, espnFindEvent } from '@/lib/crawl/espn-adapter';
-import { generateMatchReview } from './reviews';
+import { generateMatchReview, storeEspnRecap } from './reviews';
 import { resolveBracket } from '@/lib/domain/bracket';
 import type { Database, Match, Team } from '@/lib/supabase/types';
 
@@ -90,13 +90,20 @@ export async function runLiveTick() {
   const newlyFinished: string[] = [];
   const teamsById = new Map(teams.map((t) => [t.id, t]));
 
+  // Matches that already have an authoritative ESPN recap — skip re-storing and
+  // never fall back to an LLM review for them.
+  const { data: reviewRows } = await db.from('match_reviews').select('match_id, source');
+  const espnReviewed = new Set(
+    (reviewRows ?? []).filter((r) => r.source === 'espn').map((r) => r.match_id)
+  );
+
   for (const m of relevant) {
     if (!m.home_team_id || !m.away_team_id || !m.kickoff_utc) continue;
     const home = teamsById.get(m.home_team_id);
     const away = teamsById.get(m.away_team_id);
     if (!home || !away) continue;
     try {
-      await tickOneMatch(db, m, home, away, summary, newlyFinished);
+      await tickOneMatch(db, m, home, away, summary, newlyFinished, espnReviewed);
     } catch (e) {
       summary.errors.push(`m${m.match_number ?? '?'}: ${(e as Error).message}`);
     }
@@ -105,6 +112,10 @@ export async function runLiveTick() {
   if (newlyFinished.length > 0) {
     const withTeams = joinMatchTeams(matches, teams);
     for (const id of newlyFinished) {
+      // ESPN recaps publish ~hours after FT, so a just-finished match usually
+      // has none yet — seed the LLM fallback now; a later tick swaps in the
+      // recap once it's live (tickOneMatch, gated by espnReviewed).
+      if (espnReviewed.has(id)) continue;
       const wt = withTeams.find((x) => x.id === id);
       if (wt && (await generateMatchReview(db, wt))) {
         revalidateTag(`review:${id}`);
@@ -144,9 +155,11 @@ async function tickOneMatch(
     commentaryUpdated: number;
     statsUpdated: number;
     oddsUpdated: number;
+    reviewsGenerated: number;
     errors: string[];
   },
-  newlyFinished: string[]
+  newlyFinished: string[],
+  espnReviewed: Set<string>
 ) {
   const ev = await espnFindEvent(home.name, away.name, home.code, away.code, m.kickoff_utc!);
   if (!ev) return;
@@ -226,6 +239,19 @@ async function tickOneMatch(
         // Keep in-memory copy consistent so bracket resolution sees the new state.
         Object.assign(m, update);
       }
+    }
+  }
+
+  // -- ESPN recap (authoritative review for finished matches) --
+  // Reuses the summary already fetched above — no extra HTTP. ESPN publishes
+  // the recap article after the final whistle, so it lands on a later tick
+  // within the post-match refresh window.
+  if (ev.status === 'finished' && data.recap && !espnReviewed.has(m.id)) {
+    if (await storeEspnRecap(db, m.id, data.recap)) {
+      espnReviewed.add(m.id);
+      revalidateTag(`review:${m.id}`);
+      revalidateTag('matches:all');
+      summary.reviewsGenerated++;
     }
   }
 

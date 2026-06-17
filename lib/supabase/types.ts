@@ -230,12 +230,14 @@ export interface Database {
           match_id: string;
           language: string;
           body: string;
+          source: string;
           generated_at: string;
         };
         Insert: {
           match_id: string;
           language?: string;
           body: string;
+          source?: string;
           generated_at?: string;
         };
         Update: Partial<Database['public']['Tables']['match_reviews']['Insert']>;
