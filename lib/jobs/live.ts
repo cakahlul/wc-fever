@@ -8,9 +8,10 @@ import { resolveBracket } from '@/lib/domain/bracket';
 import type { Database, Match, Team } from '@/lib/supabase/types';
 
 /**
- * Live tick — runs every 30s from the PM2 ticker. Every tick it refreshes
- * every match from ESPN (incoming, live, and finished) so scores, lineups,
- * schedule changes, and post-match stat backfills are always in sync.
+ * Live tick — driven by the PM2 ticker (5s while a match is live, 60s idle).
+ * While live it refreshes only the time-critical matches from ESPN; when idle
+ * it sweeps every match so scores, lineups, schedule changes, and post-match
+ * stat backfills stay in sync.
  *
  * All data comes from ESPN's public site.api summary endpoint, which returns
  * score + status + lineups + events + commentary + stats + odds + gamecast
@@ -58,10 +59,13 @@ export async function runLiveTick() {
     return now - new Date(m.updated_at).getTime() >= POST_MATCH_MIN_GAP_MS;
   });
 
-  // De-duplicate the time-critical buckets, then fall back to every other
-  // match so incoming/finished rows also get refreshed every tick.
+  // De-duplicate the time-critical buckets. While a match is live the ticker
+  // runs fast (5s), so we must stay light on ESPN — refresh only those buckets.
+  // With nothing live we're on the slow idle cadence (60s) and can afford a
+  // full sweep to catch schedule changes and post-match stat backfills.
+  const timeCritical = [...liveMatches, ...imminent, ...lineupCandidates, ...recentlyFinished];
   const relevantById = new Map<string, Match>();
-  for (const m of [...liveMatches, ...imminent, ...lineupCandidates, ...recentlyFinished, ...matches])
+  for (const m of liveMatches.length > 0 ? timeCritical : [...timeCritical, ...matches])
     relevantById.set(m.id, m);
   const relevant = [...relevantById.values()];
 

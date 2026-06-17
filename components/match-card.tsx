@@ -6,6 +6,7 @@ import type { MatchWithTeams } from '@/lib/supabase/types';
 import { slotLabel } from '@/lib/domain/bracket';
 import { isBigMatch } from '@/lib/domain/big-match';
 import { formatMatchMinute } from '@/lib/domain/minute';
+import { goalScorers, liveBreakLabel, type Scorer } from '@/lib/domain/match-state';
 import { LocalTime } from './local-time';
 import { BigMatchBadge } from './big-match-badge';
 
@@ -24,30 +25,43 @@ function TeamRow({
   slot,
   score,
   winner,
+  scorers,
 }: {
   team: MatchWithTeams['home_team'];
   slot: string | null;
   score: number | null;
   winner: boolean;
+  scorers: Scorer[];
 }) {
   return (
-    <div className="flex items-center justify-between gap-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <span aria-hidden className="text-lg">
-          {team?.flag_emoji ?? '⚽'}
-        </span>
-        <span
-          className={`truncate text-sm ${
-            team ? (winner ? 'font-bold text-ice' : 'text-ice') : 'italic text-mist'
-          }`}
-        >
-          {team?.name ?? slotLabel(slot)}
-        </span>
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span aria-hidden className="text-lg">
+            {team?.flag_emoji ?? '⚽'}
+          </span>
+          <span
+            className={`truncate text-sm ${
+              team ? (winner ? 'font-bold text-ice' : 'text-ice') : 'italic text-mist'
+            }`}
+          >
+            {team?.name ?? slotLabel(slot)}
+          </span>
+        </div>
+        {score != null && (
+          <span className={`font-display text-lg tabular-nums ${winner ? 'font-bold text-gold-bright' : ''}`}>
+            {score}
+          </span>
+        )}
       </div>
-      {score != null && (
-        <span className={`font-display text-lg tabular-nums ${winner ? 'font-bold text-gold-bright' : ''}`}>
-          {score}
-        </span>
+      {scorers.length > 0 && (
+        <ul className="ml-7 mt-0.5 space-y-0.5">
+          {scorers.map((s, i) => (
+            <li key={i} className="truncate text-[10px] text-mist">
+              {s.player} <span className="tabular-nums text-gold-bright/80">{s.minute}</span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -65,6 +79,8 @@ export function MatchCard({ match }: { match: MatchWithTeams }) {
     finished && match.home_score != null && match.away_score != null
       ? match.away_score > match.home_score
       : false;
+  const breakLabel = liveBreakLabel(match);
+  const scorers = live || finished ? goalScorers(match.events) : { home: [], away: [] };
 
   return (
     <motion.div
@@ -93,7 +109,7 @@ export function MatchCard({ match }: { match: MatchWithTeams }) {
             {live ? (
               <span className="flex items-center gap-1 font-bold text-live">
                 <span aria-hidden className="h-2 w-2 rounded-full bg-live animate-live-pulse" />
-                LIVE {formatMatchMinute(match.minute, match.minute_stoppage) ?? ''}
+                {breakLabel ?? `LIVE ${formatMatchMinute(match.minute, match.minute_stoppage) ?? ''}`}
               </span>
             ) : finished ? (
               <span>FT</span>
@@ -108,12 +124,14 @@ export function MatchCard({ match }: { match: MatchWithTeams }) {
             slot={match.home_slot}
             score={live || finished ? match.home_score : null}
             winner={homeWon}
+            scorers={scorers.home}
           />
           <TeamRow
             team={match.away_team}
             slot={match.away_slot}
             score={live || finished ? match.away_score : null}
             winner={awayWon}
+            scorers={scorers.away}
           />
         </div>
         {match.venue && (

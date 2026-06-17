@@ -649,6 +649,11 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
     'end-sudden-death': 'End of extra time',
     'kickoff': 'Kickoff',
   };
+  // Generic fallback labels used when ESPN gives a delay event no commentary text.
+  const GENERIC_DELAY = new Set(['Delay', 'Delay over']);
+  // Period boundaries the UI keys off for the live "Half time" label — force the
+  // canonical label so detection never depends on ESPN's free-text wording.
+  const CANONICAL_DETAIL = new Set(['halftime', 'start-2nd-half']);
 
   const events: Array<MatchEvent & { teamAbbr?: string }> = [];
   for (const ke of data.keyEvents ?? []) {
@@ -700,13 +705,37 @@ export async function espnFetchSummary(eventId: string, homeAbbr?: string, awayA
       player: playerName,
       playerOff,
       detail: isMeta
-        ? (ke.text?.trim() || META_DETAIL[type] || type)
+        ? (CANONICAL_DETAIL.has(type) ? META_DETAIL[type] : (ke.text?.trim() || META_DETAIL[type] || type))
         : undefined,
       teamAbbr: ke.team?.abbreviation,
     });
   }
   // Sort by base minute, then stoppage ascending within same minute.
   events.sort((a, b) => a.minute - b.minute || (a.stoppage ?? 0) - (b.stoppage ?? 0));
+
+  // ESPN emits two delay events per stoppage: one with descriptive commentary
+  // text and one bare (which falls back to the generic "Delay"/"Delay over"
+  // label). Collapse same-minute delays, keeping the descriptive one.
+  const deduped: typeof events = [];
+  for (const e of events) {
+    const prev = deduped[deduped.length - 1];
+    if (
+      e.type === 'delay' &&
+      prev?.type === 'delay' &&
+      prev.minute === e.minute &&
+      (prev.stoppage ?? 0) === (e.stoppage ?? 0)
+    ) {
+      const prevGeneric = !prev.detail || GENERIC_DELAY.has(prev.detail);
+      const curGeneric = !e.detail || GENERIC_DELAY.has(e.detail);
+      const replace = prevGeneric
+        ? !curGeneric || (e.detail?.length ?? 0) > (prev.detail?.length ?? 0)
+        : !curGeneric && (e.detail?.length ?? 0) > (prev.detail?.length ?? 0);
+      if (replace) deduped[deduped.length - 1] = e;
+      continue;
+    }
+    deduped.push(e);
+  }
+  events.splice(0, events.length, ...deduped);
 
   const commentary = parseCommentary(data.commentary);
   const teamStats = parseTeamStats(data.boxscore?.teams);

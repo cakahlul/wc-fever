@@ -14,7 +14,7 @@ loadEnvLocal();
 
 const BASE_URL = process.env.APP_BASE_URL ?? 'http://localhost:3000';
 const SECRET = process.env.CRON_SECRET;
-const LIVE_INTERVAL_MS = 10_000;
+const LIVE_INTERVAL_MS = 5_000;
 const IDLE_INTERVAL_MS = 60_000;
 
 if (!SECRET) {
@@ -48,5 +48,5 @@ async function loop() {
   setTimeout(loop, nextDelay);
 }
 
-console.log(`wc-fever live ticker → ${BASE_URL}/api/crawl/live (10s live / 60s idle)`);
+console.log(`wc-fever live ticker → ${BASE_URL}/api/crawl/live (5s live / 60s idle)`);
 loop();

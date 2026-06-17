@@ -34,16 +34,16 @@ export interface MatchTabsProps {
 }
 
 const EVENT_ICONS: Record<string, string> = {
-  goal: '⚽',
+  goal: '🥅',
   penalty: '🎯',
-  own_goal: '🥅',
+  own_goal: '🙃',
   yellow: '🟨',
   red: '🟥',
   second_yellow: '🟥',
   sub: '🔁',
   delay: '⏸️',
   period: '⏱️',
-  start: '🚀',
+  start: '⚽',
   end: '🛑',
 };
 

@@ -4,6 +4,7 @@ import { isBigMatch } from '@/lib/domain/big-match';
 import { Hero3D } from '@/components/hero-3d';
 import { Countdown } from '@/components/countdown';
 import { MatchCard } from '@/components/match-card';
+import { LiveNowCards } from '@/components/live-now-cards';
 import { EmptyState } from '@/components/skeleton';
 
 export const dynamic = 'force-dynamic';
@@ -17,7 +18,8 @@ const QUICK_NAV = [
 ];
 
 export default async function HomePage() {
-  const { matches } = await getMatchesWithTeams();
+  const { matches, teams } = await getMatchesWithTeams();
+  const rawMatches = matches.map(({ home_team, away_team, ...m }) => m);
   const now = Date.now();
 
   const upcoming = matches
@@ -74,20 +76,9 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {/* Live now — front and center so it pulls focus */}
-      {liveNow.length > 0 && (
-        <section aria-labelledby="live-now">
-          <h2 id="live-now" className="mb-3 flex items-center gap-2 font-display text-xl font-bold">
-            <span aria-hidden className="h-2.5 w-2.5 rounded-full bg-live animate-live-pulse" />
-            Live now
-          </h2>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {liveNow.map((m) => (
-              <MatchCard key={m.id} match={m} />
-            ))}
-          </div>
-        </section>
-      )}
+      {/* Live now — front and center so it pulls focus. Client component so the
+          minute/score tick in realtime, in sync with the match detail page. */}
+      <LiveNowCards initialMatches={rawMatches} teams={teams} />
 
       {/* Next fixtures */}
       <section aria-labelledby="next-fixtures">
