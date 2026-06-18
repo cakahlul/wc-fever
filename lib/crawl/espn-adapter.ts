@@ -251,6 +251,7 @@ const EVENT_TYPE_MAP: Record<string, MatchEvent['type']> = {
   'goal---header': 'goal',
   'goal---penalty': 'penalty',
   'penalty-scored': 'penalty',
+  'penalty---scored': 'penalty',
   'penalty-miss': 'penalty_miss',
   'penalty-missed': 'penalty_miss',
   'penalty---missed': 'penalty_miss',
