@@ -1,7 +1,9 @@
 import type { Match, Team } from '@/lib/supabase/types';
 import {
   allGroupsComplete,
+  clinchedGroupSlots,
   computeAllStandings,
+  GROUPS,
   isGroupComplete,
   rankThirdPlaceTeams,
   type TeamStanding,
@@ -28,6 +30,13 @@ import {
 export interface BracketContext {
   /** group letter -> ordered standings (only present when group complete) */
   groupResults: Map<string, TeamStanding[]>;
+  /**
+   * Position-locked teams seeded before a group finishes: slot string
+   * ('W-<G>' / 'RU-<G>') -> team that has mathematically clinched that exact
+   * position. Lets a confirmed group winner / runner-up drop into the bracket
+   * the moment it's certain, not only at group completion.
+   */
+  clinchedSlots: Map<string, Team>;
   /** '3rd:XYZ' slot string -> resolved third-placed team */
   thirdAssignments: Map<string, Team>;
   /** match_number -> match row (for W<n>/L<n> chains) */
@@ -44,6 +53,17 @@ export function buildBracketContext(teams: Team[], matches: Match[]): BracketCon
 
   const byNumber = new Map<number, Match>();
   for (const m of matches) if (m.match_number != null) byNumber.set(m.match_number, m);
+
+  // Seed position-locked teams (champion / exact runner-up) for groups that
+  // haven't finished yet — once locked, the slot is certain.
+  const teamsById = new Map(teams.map((t) => [t.id, t]));
+  const clinchedSlots = new Map<string, Team>();
+  for (const g of GROUPS) {
+    if (groupResults.has(g)) continue; // complete groups resolve via groupResults
+    const { champion, runnerUp } = clinchedGroupSlots(g, teams, matches);
+    if (champion && teamsById.get(champion)) clinchedSlots.set(`W-${g}`, teamsById.get(champion)!);
+    if (runnerUp && teamsById.get(runnerUp)) clinchedSlots.set(`RU-${g}`, teamsById.get(runnerUp)!);
+  }
 
   const thirdAssignments = new Map<string, Team>();
   // The global third-place ranking only exists once every group has finished.
@@ -62,9 +82,10 @@ export function buildBracketContext(teams: Team[], matches: Match[]): BracketCon
 
   return {
     groupResults,
+    clinchedSlots,
     thirdAssignments,
     byNumber,
-    teamsById: new Map(teams.map((t) => [t.id, t])),
+    teamsById,
   };
 }
 
@@ -110,10 +131,18 @@ export function resolveSlot(
   if (!slot) return null;
 
   if (slot.startsWith('W-')) {
-    return ctx.groupResults.get(slot.slice(2))?.[0]?.team ?? null;
+    return (
+      ctx.groupResults.get(slot.slice(2))?.[0]?.team ??
+      ctx.clinchedSlots.get(slot) ??
+      null
+    );
   }
   if (slot.startsWith('RU-')) {
-    return ctx.groupResults.get(slot.slice(3))?.[1]?.team ?? null;
+    return (
+      ctx.groupResults.get(slot.slice(3))?.[1]?.team ??
+      ctx.clinchedSlots.get(slot) ??
+      null
+    );
   }
   if (slot.startsWith('3rd:')) {
     return ctx.thirdAssignments.get(slot) ?? null;

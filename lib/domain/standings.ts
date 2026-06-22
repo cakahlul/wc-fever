@@ -198,6 +198,149 @@ export function computeGroupStandings(
   });
 }
 
+/**
+ * Mathematical qualification status for a team within its group.
+ *   'champion'   — locked 1st place across every remaining-result scenario
+ *   'top2'       — locked top-2 (qualified), but 1st vs 2nd may still be open
+ *   'eliminated' — cannot finish in the top 3 in any scenario (gugur)
+ *   'open'       — not yet decided
+ *
+ * We treat 3rd place as "still alive" (conservative): whether a 3rd-placed team
+ * advances depends on the cross-group best-third race, which isn't decided until
+ * all groups finish — so a team that can still reach 3rd is never 'eliminated'.
+ */
+export type Clinch = 'champion' | 'top2' | 'eliminated' | 'open';
+
+/** The three possible outcomes of a single unplayed match, as (gf, ga) deltas. */
+const OUTCOMES: Array<[number, number]> = [
+  [1, 0], // home win
+  [0, 0], // draw
+  [0, 1], // away win
+];
+
+/**
+ * Classify every team in a group as champion / top2 / eliminated / open by
+ * brute-forcing all remaining group fixtures. Each unfinished match has 3
+ * outcomes, so the search is 3^|U| with |U| ≤ 6 (≤ 729) — trivial. For each
+ * scenario we reuse computeGroupStandings (full FIFA tiebreaker ladder) and
+ * track each team's best/worst achievable rank.
+ */
+export function computeGroupClinch(
+  group: string,
+  teams: Team[],
+  matches: Match[]
+): Map<string, Clinch> {
+  const groupTeams = teams.filter((t) => t.group === group);
+  const groupMatches = matches.filter((m) => m.stage === 'group' && m.group === group);
+  const unplayed = groupMatches.filter(
+    (m) => m.status !== 'finished' || m.home_score == null || m.away_score == null
+  );
+
+  // best[id] = min rank reachable, worst[id] = max rank reachable across scenarios.
+  const best = new Map<string, number>();
+  const worst = new Map<string, number>();
+  const note = (rows: TeamStanding[]) => {
+    for (const r of rows) {
+      const id = r.team.id;
+      best.set(id, Math.min(best.get(id) ?? Infinity, r.rank));
+      worst.set(id, Math.max(worst.get(id) ?? 0, r.rank));
+    }
+  };
+
+  // Enumerate every combination of outcomes for the unplayed matches. We
+  // synthesize finished matches with scores that realize each outcome; only the
+  // relative result matters for points/GD/GF accumulation in computeGroupStandings.
+  const total = OUTCOMES.length ** unplayed.length;
+  for (let combo = 0; combo < total; combo++) {
+    let n = combo;
+    const hypothetical: Match[] = unplayed.map((m) => {
+      const [hg, ag] = OUTCOMES[n % OUTCOMES.length];
+      n = Math.floor(n / OUTCOMES.length);
+      return { ...m, status: 'finished', home_score: hg, away_score: ag } as Match;
+    });
+    // Replace the unplayed rows with our hypothetical ones, keep the played ones.
+    const unplayedIds = new Set(unplayed.map((m) => m.id));
+    const scenarioMatches = [
+      ...groupMatches.filter((m) => !unplayedIds.has(m.id)),
+      ...hypothetical,
+    ];
+    note(computeGroupStandings(group, teams, scenarioMatches));
+  }
+
+  const result = new Map<string, Clinch>();
+  for (const t of groupTeams) {
+    const b = best.get(t.id) ?? 4;
+    const w = worst.get(t.id) ?? 4;
+    if (w <= 1) result.set(t.id, 'champion');
+    else if (w <= 2) result.set(t.id, 'top2');
+    else if (b >= 4) result.set(t.id, 'eliminated');
+    else result.set(t.id, 'open');
+  }
+  return result;
+}
+
+/**
+ * Position-locked team ids for bracket seeding: the team that has clinched 1st
+ * (fills 'W-<G>') and the team that has clinched exactly 2nd (fills 'RU-<G>').
+ * A 'top2' team that could still be 1st is intentionally NOT returned as
+ * runnerUp — its specific slot isn't decided yet.
+ */
+export function clinchedGroupSlots(
+  group: string,
+  teams: Team[],
+  matches: Match[]
+): { champion?: string; runnerUp?: string } {
+  const clinch = computeGroupClinch(group, teams, matches);
+  // Re-derive best ranks to distinguish "exactly 2nd" from "1st-or-2nd".
+  const out: { champion?: string; runnerUp?: string } = {};
+  const groupTeams = teams.filter((t) => t.group === group);
+  for (const t of groupTeams) {
+    const c = clinch.get(t.id);
+    if (c === 'champion') out.champion = t.id;
+  }
+  // Runner-up is locked only when a top2 team can never be champion. We detect
+  // that by checking it stays rank ≥ 2 across scenarios: a champion exists and
+  // this team is the unique other top2 whose best rank is 2.
+  for (const t of groupTeams) {
+    if (clinch.get(t.id) !== 'top2') continue;
+    if (isExactlySecond(group, t.id, teams, matches)) out.runnerUp = t.id;
+  }
+  return out;
+}
+
+/** True when team can finish no higher than 2nd and no lower than 2nd. */
+function isExactlySecond(
+  group: string,
+  teamId: string,
+  teams: Team[],
+  matches: Match[]
+): boolean {
+  const groupMatches = matches.filter((m) => m.stage === 'group' && m.group === group);
+  const unplayed = groupMatches.filter(
+    (m) => m.status !== 'finished' || m.home_score == null || m.away_score == null
+  );
+  let best = Infinity;
+  let worst = 0;
+  const total = OUTCOMES.length ** unplayed.length;
+  const unplayedIds = new Set(unplayed.map((m) => m.id));
+  for (let combo = 0; combo < total; combo++) {
+    let n = combo;
+    const hypothetical: Match[] = unplayed.map((m) => {
+      const [hg, ag] = OUTCOMES[n % OUTCOMES.length];
+      n = Math.floor(n / OUTCOMES.length);
+      return { ...m, status: 'finished', home_score: hg, away_score: ag } as Match;
+    });
+    const rows = computeGroupStandings(group, teams, [
+      ...groupMatches.filter((m) => !unplayedIds.has(m.id)),
+      ...hypothetical,
+    ]);
+    const rank = rows.find((r) => r.team.id === teamId)?.rank ?? 4;
+    best = Math.min(best, rank);
+    worst = Math.max(worst, rank);
+  }
+  return best === 2 && worst === 2;
+}
+
 export const GROUPS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'] as const;
 
 export function computeAllStandings(

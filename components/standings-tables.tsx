@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import type { TeamStanding } from '@/lib/domain/standings';
+import type { Clinch, TeamStanding } from '@/lib/domain/standings';
 
 /**
  * Renders the 12 group tables + the best-thirds mini-table. Standings are
@@ -10,7 +10,15 @@ import type { TeamStanding } from '@/lib/domain/standings';
  * passed in as plain data.
  */
 
-function GroupTable({ group, rows }: { group: string; rows: TeamStanding[] }) {
+function GroupTable({
+  group,
+  rows,
+  clinch,
+}: {
+  group: string;
+  rows: TeamStanding[];
+  clinch: Map<string, Clinch>;
+}) {
   return (
     <div className="rounded-xl border border-night-50/60 bg-night-200 p-3">
       <h3 className="mb-2 font-display text-sm font-bold uppercase tracking-widest text-gold-bright">
@@ -27,26 +35,40 @@ function GroupTable({ group, rows }: { group: string; rows: TeamStanding[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
+          {rows.map((r, i) => {
+            const status = clinch.get(r.team.id) ?? 'open';
+            const qualified = status === 'champion' || status === 'top2';
+            const eliminated = status === 'eliminated';
+            return (
             <motion.tr
               key={r.team.id}
               layout
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: i * 0.04 }}
-              className={`border-t border-night-50/40 ${r.rank <= 2 ? 'bg-pitch/20' : ''}`}
+              className={`border-t border-night-50/40 ${
+                qualified ? 'bg-pitch/20' : eliminated ? 'bg-live/10' : ''
+              }`}
             >
               <td className="py-1.5 pr-1 text-mist">{r.rank}</td>
               <td className="py-1.5">
                 <Link href={`/teams/${r.team.code}`} className="flex items-center gap-1.5 hover:text-gold-bright">
                   <span aria-hidden>{r.team.flag_emoji}</span>
                   <span className="truncate">{r.team.code}</span>
-                  {r.rank <= 2 && (
+                  {qualified && (
                     <span
                       className="rounded bg-pitch-line/20 px-1 text-[9px] font-bold uppercase text-pitch-line"
-                      title="Qualified position (top 2)"
+                      title="Qualified to the knockout round"
                     >
                       Q
+                    </span>
+                  )}
+                  {eliminated && (
+                    <span
+                      className="rounded bg-live/20 px-1 text-[9px] font-bold uppercase text-live"
+                      title="Eliminated — cannot reach the knockout round"
+                    >
+                      OUT
                     </span>
                   )}
                 </Link>
@@ -60,7 +82,8 @@ function GroupTable({ group, rows }: { group: string; rows: TeamStanding[] }) {
               <td className="py-1.5 text-center tabular-nums">{r.gd > 0 ? `+${r.gd}` : r.gd}</td>
               <td className="py-1.5 text-center font-bold tabular-nums text-gold-bright">{r.points}</td>
             </motion.tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -70,9 +93,12 @@ function GroupTable({ group, rows }: { group: string; rows: TeamStanding[] }) {
 export function StandingsTables({
   groups,
   thirds,
+  allComplete,
 }: {
-  groups: Array<{ group: string; rows: TeamStanding[] }>;
+  groups: Array<{ group: string; rows: TeamStanding[]; clinch: Map<string, Clinch> }>;
   thirds: TeamStanding[];
+  /** Best-8 thirds only resolve once every group has finished. */
+  allComplete: boolean;
 }) {
   return (
     <div className="space-y-8">
@@ -84,8 +110,8 @@ export function StandingsTables({
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {groups.map(({ group, rows }) => (
-          <GroupTable key={group} group={group} rows={rows} />
+        {groups.map(({ group, rows, clinch }) => (
+          <GroupTable key={group} group={group} rows={rows} clinch={clinch} />
         ))}
       </div>
 
@@ -109,20 +135,24 @@ export function StandingsTables({
             </tr>
           </thead>
           <tbody>
-            {thirds.map((r, i) => (
+            {thirds.map((r, i) => {
+              const qualified = allComplete && i < 8;
+              return (
               <motion.tr
                 key={r.team.id}
                 layout
                 initial={{ opacity: 0, x: -8 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.03 }}
-                className={`border-t border-night-50/40 ${i < 8 ? 'bg-pitch/20' : 'opacity-60'}`}
+                className={`border-t border-night-50/40 ${
+                  qualified ? 'bg-pitch/20' : allComplete ? 'opacity-60' : ''
+                }`}
               >
                 <td className="py-1.5 pr-2 text-mist">{i + 1}</td>
                 <td className="py-1.5">
                   <span className="flex items-center gap-1.5">
                     <span aria-hidden>{r.team.flag_emoji}</span> {r.team.name}
-                    {i < 8 && (
+                    {qualified && (
                       <span className="rounded bg-pitch-line/20 px-1 text-[9px] font-bold uppercase text-pitch-line">
                         Q
                       </span>
@@ -135,7 +165,8 @@ export function StandingsTables({
                 <td className="py-1.5 text-center tabular-nums">{r.gf}</td>
                 <td className="py-1.5 text-center font-bold tabular-nums text-gold-bright">{r.points}</td>
               </motion.tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </section>
