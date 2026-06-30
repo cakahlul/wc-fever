@@ -1,4 +1,5 @@
 import 'server-only';
+import { revalidateTag } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/server';
 import { joinMatchTeams } from '@/lib/supabase/queries';
 import { fetchLiveData } from '@/lib/crawl';
@@ -6,9 +7,11 @@ import { crawlSearch, crawlWikipediaLong } from '@/lib/crawl/playwright-adapter'
 import { extractJSON } from '@/lib/llm';
 import { LIVE_SCORE_EXTRACTION, SQUAD_EXTRACTION, RANKINGS_EXTRACTION } from '@/lib/llm/prompts';
 import { matchFixture, matchTeam, type ExtractedLiveScores } from './helpers';
+import { parseKnockoutSchedule, parseThirdPlaceAllocation } from './ko-schedule';
 import { generateMatchReview, generateHypeBlurb } from './reviews';
 import { resolveBracket } from '@/lib/domain/bracket';
 import { isBigMatch } from '@/lib/domain/big-match';
+import type { Database } from '@/lib/supabase/types';
 
 /**
  * Reconcile sweep — every 12h via crontab. Self-healing for anything the
@@ -28,6 +31,8 @@ export async function runReconcile() {
     blurbsGenerated: 0,
     squadsRefreshed: 0,
     bracketUpdates: 0,
+    kickoffsFilled: 0,
+    thirdsCorrected: 0,
     ranksUpdated: 0,
     errors: [] as string[],
   };
@@ -139,11 +144,108 @@ export async function runReconcile() {
     }
   }
 
-  // ---- 4. Knockout slot resolution ----
+  // ---- 4. Knockout schedule + result backfill ----
+  // Seed leaves knockout kickoff_utc NULL, and nothing else fills it — the live
+  // tick skips any match without a kickoff (lib/jobs/live.ts), so a played
+  // knockout match is never crawled and the bracket stalls. The Wikipedia
+  // knockout article's per-match detail boxes carry kickoff, result, AND the
+  // penalty-shootout winner in a fixed format, so we parse them deterministically
+  // (the LLM truncates on this large, verbose page).
+  const koMatches = matches.filter((m) => m.stage !== 'group');
+  if (koMatches.some((m) => !m.kickoff_utc || m.status !== 'finished')) {
+    try {
+      const text = await crawlWikipediaLong('2026 FIFA World Cup knockout stage');
+
+      // 4a. Correct R32 third-place assignments. Our matchThirdsToSlots finds a
+      // valid matching but not necessarily FIFA's official one, so the third in
+      // some R32 slots is the wrong team. The article states the official
+      // allocation for this tournament ("1E (Germany) vs 3D (Paraguay)"); apply
+      // it before results so finished blocks match the corrected pairings.
+      const allocByWinner = new Map(
+        parseThirdPlaceAllocation(text).map((a) => [a.winnerGroup, a.thirdTeamName])
+      );
+      for (const m of koMatches.filter((m) => m.stage === 'r32')) {
+        const thirdIsAway = m.away_slot?.startsWith('3rd:') ?? false;
+        const thirdIsHome = m.home_slot?.startsWith('3rd:') ?? false;
+        if (!thirdIsAway && !thirdIsHome) continue;
+        const winnerSlot = thirdIsAway ? m.home_slot : m.away_slot;
+        if (!winnerSlot?.startsWith('W-')) continue;
+        const thirdName = allocByWinner.get(winnerSlot.slice(2));
+        if (!thirdName) continue;
+        const team = matchTeam(thirdName, teams);
+        if (!team) continue;
+        const current = thirdIsAway ? m.away_team_id : m.home_team_id;
+        if (current === team.id) continue; // already correct
+        const patch: Database['public']['Tables']['matches']['Update'] = thirdIsAway
+          ? { away_team_id: team.id }
+          : { home_team_id: team.id };
+        const { error } = await db.from('matches').update(patch).eq('id', m.id);
+        if (!error) {
+          Object.assign(m, patch);
+          revalidateTag(`match:${m.id}`);
+          revalidateTag('matches:all');
+          summary.thirdsCorrected++;
+        }
+      }
+
+      for (const fx of parseKnockoutSchedule(text)) {
+        // Not-yet-played blocks carry the fixture's own match number; finished
+        // blocks carry a score, so key those by team pairing.
+        let row = fx.matchNumber != null
+          ? koMatches.find((m) => m.match_number === fx.matchNumber)
+          : null;
+        let flipped = false;
+        if (!row && fx.homeName && fx.awayName) {
+          const home = matchTeam(fx.homeName, teams);
+          const away = matchTeam(fx.awayName, teams);
+          if (home && away) {
+            const found = matchFixture(home, away, koMatches);
+            if (found) ({ match: row, flipped } = found);
+          }
+        }
+        if (!row) continue;
+
+        const update: Database['public']['Tables']['matches']['Update'] = {};
+        if (!row.kickoff_utc) update.kickoff_utc = fx.kickoff_utc;
+        // Backfill a result only if the live tick hasn't already finished it —
+        // never clobber ESPN-sourced scores.
+        if (fx.finished && row.status !== 'finished') {
+          update.status = 'finished';
+          update.home_score = flipped ? fx.awayScore : fx.homeScore;
+          update.away_score = flipped ? fx.homeScore : fx.awayScore;
+          if (fx.homePens != null && fx.awayPens != null) {
+            update.home_pens = flipped ? fx.awayPens : fx.homePens;
+            update.away_pens = flipped ? fx.homePens : fx.awayPens;
+          }
+        }
+        if (Object.keys(update).length === 0) continue;
+        const { error } = await db.from('matches').update(update).eq('id', row.id);
+        if (!error) {
+          Object.assign(row, update);
+          revalidateTag(`match:${row.id}`);
+          revalidateTag('matches:all');
+          if (update.kickoff_utc) summary.kickoffsFilled++;
+          if (update.status === 'finished') summary.scoresReconciled++;
+        }
+      }
+    } catch (e) {
+      summary.errors.push(`ko schedule: ${(e as Error).message}`);
+    }
+  }
+
+  // ---- 4b. Knockout slot resolution ----
+  // Runs after step 4 so a freshly backfilled result (incl. penalty winner)
+  // propagates its winner into the next round in the same sweep.
   for (const u of resolveBracket(teams, matches)) {
     const { id, ...fields } = u;
     const { error } = await db.from('matches').update(fields).eq('id', id);
-    if (!error) summary.bracketUpdates++;
+    if (!error) {
+      const row = matches.find((m) => m.id === id);
+      if (row) Object.assign(row, fields);
+      revalidateTag(`match:${id}`);
+      revalidateTag('matches:all');
+      summary.bracketUpdates++;
+    }
   }
 
   // ---- 5. FIFA rankings refresh (slow-moving — runs each reconcile sweep) ----

@@ -135,6 +135,9 @@ export interface Database {
           minute_stoppage: number | null;
           home_score: number | null;
           away_score: number | null;
+          /** Penalty-shootout goals — set only for knockout matches decided on penalties. */
+          home_pens: number | null;
+          away_pens: number | null;
           events: MatchEvent[];
           commentary: CommentaryEntry[];
           player_stats: PlayerStatsBundle;
@@ -161,6 +164,8 @@ export interface Database {
           minute_stoppage?: number | null;
           home_score?: number | null;
           away_score?: number | null;
+          home_pens?: number | null;
+          away_pens?: number | null;
           events?: MatchEvent[];
           commentary?: CommentaryEntry[];
           player_stats?: PlayerStatsBundle;

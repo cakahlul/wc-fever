@@ -174,12 +174,18 @@ export function resolveSlot(
     if (!m || m.status !== 'finished' || m.home_score == null || m.away_score == null) {
       return null;
     }
-    // Knockout matches can't end level — score includes ET; on penalties the
-    // crawler records the deciding side via events. We treat a level score as
-    // unresolved rather than guessing.
-    if (m.home_score === m.away_score) return null;
+    // The stored score includes extra time. A knockout tie is then decided on
+    // penalties (home_pens/away_pens); fall back to those when the score is
+    // level, and treat a still-level result as unresolved rather than guessing.
+    let homeWon: boolean;
+    if (m.home_score !== m.away_score) {
+      homeWon = m.home_score > m.away_score;
+    } else if (m.home_pens != null && m.away_pens != null && m.home_pens !== m.away_pens) {
+      homeWon = m.home_pens > m.away_pens;
+    } else {
+      return null;
+    }
     const wantWinner = !!winnerOf;
-    const homeWon = m.home_score > m.away_score;
     const teamId = wantWinner === homeWon ? m.home_team_id : m.away_team_id;
     return teamId ? ctx.teamsById.get(teamId) ?? null : null;
   }
